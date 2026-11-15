@@ -1,6 +1,7 @@
 """Click seat polygons on a RAM-only camera snapshot; save coordinates only."""
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -25,6 +26,13 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
     output = Path(output)
     if output.exists() and not overwrite:
         raise FileExistsError(f"{output} already exists; choose --output or explicitly use --overwrite")
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        raise RuntimeError(
+            "Calibration needs a local Linux desktop display and mouse. "
+            "Use the Raspberry Pi desktop, not a headless SSH session. See README.md."
+        )
     cv2 = require_opencv()
     snapshot = None
     display = None

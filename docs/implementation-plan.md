@@ -2,6 +2,7 @@
 
 기준: v1.1 Local Multimodal Edge / 현재 저장소 `KNUCreaterCrew/vision`.
 초기 개발은 노트북과 내장 카메라로 진행하고, Raspberry Pi 5 검증은 별도로 수행합니다.
+Windows 개발을 유지하며 Linux 운영을 우선합니다. 현재 Linux 카메라 경로는 USB 웹캠 기준이고 CSI는 별도 작업입니다.
 
 ## 전체 5단계
 
@@ -57,6 +58,16 @@ Python 3.10에서의 실행은 별도로 확인하지 않았습니다.
 등록된 Windows Store Python 3.13으로 가상환경을 만들려는 실행도 실패했습니다.
 일반 Windows CPython 가상환경 설치·실행 방법은 README에 기록했습니다.
 
+## Windows / Raspberry Pi OS Linux 호환성 점검
+
+- Windows는 DirectShow, Linux USB 웹캠은 V4L2로 카메라 입력을 선택합니다.
+- 상태 머신·ROI·JSON 코드는 OS 공통이며, Windows/Linux 플랫폼 분기를 모의 테스트합니다.
+- Linux 캘리브레이션은 로컬 데스크톱을 요구합니다. 화면 없는 환경은 OpenCV 창을 열기 전에 안내 오류로 종료합니다.
+- Pi OS는 apt `python3-opencv`와 `--system-site-packages` 가상환경을 사용합니다. pip OpenCV 요구사항은 Windows에만 적용합니다.
+- 자동 테스트는 **총 55개 통과**했으며, Linux 플랫폼·화면 없는 환경으로 시뮬레이션한 전체 55개도 통과했습니다.
+- 네이티브 Linux·ARM64·실제 Pi/웹캠/GUI 실행 검증은 수행하지 않았습니다. CSI 모듈은 Picamera2 경로를 별도로 구현해야 합니다.
+- 설치 방법과 지원 범위를 README, Linux 우선 원칙을 AGENTS.md에 반영했습니다.
+
 ## 다음 작업과 미검증 사항
 
 - 사용자 PowerShell에서 수정한 도구를 다시 실행해 내장 카메라로 좌석 1~2개를 지정·확정·저장합니다.
@@ -64,4 +75,4 @@ Python 3.10에서의 실행은 별도로 확인하지 않았습니다.
 - bbox가 프레임 최하단에 닿는 사례, 통로 보행자, 인접 좌석 경계 등은 실제 영상에서 확인해야 합니다.
 - 현재 `empty_verified`는 테스트 신호입니다. 실제 검증기가 없으므로 빈자리 안내 품질은 아직 검증하지 않았습니다.
 - 실카메라 입력, YOLO/VLM 호환성·정확도, Pi 성능, 스왑·네트워크 검증은 수행하지 않았습니다.
-- `.git` 쓰기 제한으로 `feat/state-machine` 브랜치를 만들지 못했습니다. 현재 `dev` 작업 폴더의 미커밋 변경이며 커밋·푸시는 하지 않았습니다.
+- 1~2단계는 사용자 커밋 `f526f6f`에 반영된 것을 확인했습니다. 이번 Linux 호환성 변경은 아직 커밋·푸시하지 않았습니다.

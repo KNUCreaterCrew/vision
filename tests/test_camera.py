@@ -11,7 +11,8 @@ class CameraTests(unittest.TestCase):
         capture.isOpened.return_value = True
         return SimpleNamespace(
             VideoCapture=Mock(return_value=capture),
-            CAP_DSHOW=700, CAP_ANY=0, CAP_PROP_FRAME_WIDTH=3, CAP_PROP_FRAME_HEIGHT=4,
+            CAP_DSHOW=700, CAP_V4L2=200, CAP_ANY=0,
+            CAP_PROP_FRAME_WIDTH=3, CAP_PROP_FRAME_HEIGHT=4,
         ), capture
 
     def test_session_opens_only_numeric_local_device_and_releases_after_error(self):
@@ -23,6 +24,17 @@ class CameraTests(unittest.TestCase):
                     raise RuntimeError("processing error")
         self.assertEqual(cv.VideoCapture.call_args.args[0], 0)
         capture.release.assert_called_once()
+
+    def test_platform_selects_windows_or_linux_backend(self):
+        for platform, expected in (("win32", 700), ("linux", 200), ("darwin", 0)):
+            with self.subTest(platform=platform):
+                cv, capture = self.cv()
+                with patch("zeroframe.camera.require_opencv", return_value=cv), \
+                     patch("zeroframe.camera.sys.platform", platform):
+                    with camera_session(1):
+                        pass
+                cv.VideoCapture.assert_called_once_with(1, expected)
+                capture.release.assert_called_once()
 
     def test_failed_open_and_property_setup_release_camera(self):
         for failure in ("open", "set"):

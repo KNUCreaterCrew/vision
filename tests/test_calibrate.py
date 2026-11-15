@@ -41,11 +41,12 @@ def fake_cv(actions):
 
 
 class CalibrationTests(unittest.TestCase):
-    def run_calibration(self, path, actions, *, seat_ids=None, **kwargs):
+    def run_calibration(self, path, actions, *, seat_ids=None, display=None, **kwargs):
         cv = fake_cv(actions)
         with patch("calibrate.require_opencv", return_value=cv), \
              patch("calibrate.camera_session", return_value=nullcontext(object())), \
              patch("calibrate.read_frame", return_value=FakeFrame()), \
+             patch.dict("os.environ", {"DISPLAY": ":test"} if display is None else display, clear=True), \
              patch("sys.stdout") as stdout:
             result = calibrate("R", ["A-01"] if seat_ids is None else seat_ids, output=path, **kwargs)
         self.output = "".join(call.args[0] for call in stdout.write.call_args_list)
@@ -114,6 +115,24 @@ class CalibrationTests(unittest.TestCase):
                     calibrate("R", ["A", "A"], output=path)
                 cv.assert_not_called()
 
+    def test_linux_without_display_is_rejected_before_loading_opencv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("calibrate.sys.platform", "linux"), \
+                 patch.dict("os.environ", {}, clear=True), \
+                 patch("calibrate.require_opencv") as cv:
+                with self.assertRaisesRegex(RuntimeError, "local Linux desktop"):
+                    calibrate("R", ["A"], output=Path(directory) / "roi.json")
+                cv.assert_not_called()
+
+    def test_linux_desktop_display_reaches_calibration(self):
+        for display in ({"DISPLAY": ":0"}, {"WAYLAND_DISPLAY": "wayland-0"}):
+            with self.subTest(display=display), tempfile.TemporaryDirectory() as directory:
+                with patch("calibrate.sys.platform", "linux"):
+                    result = self.run_calibration(
+                        Path(directory) / "roi.json", [(ord("q"), [])], display=display
+                    )
+                self.assertIsNone(result)
+
     def test_cli_prints_actionable_error_without_traceback(self):
         with patch("calibrate.calibrate", side_effect=RuntimeError("camera unavailable")), \
              patch("sys.stderr") as stderr:
@@ -128,6 +147,7 @@ class CalibrationTests(unittest.TestCase):
             with patch("calibrate.require_opencv", return_value=cv), \
                  patch("calibrate.camera_session", return_value=nullcontext(object())), \
                  patch("calibrate.read_frame", return_value=FakeFrame()), \
+                 patch.dict("os.environ", {"DISPLAY": ":test"}, clear=True), \
                  patch("sys.stdout"):
                 with self.assertRaisesRegex(RuntimeError, "display failed"):
                     calibrate("R", ["A"], output=path)

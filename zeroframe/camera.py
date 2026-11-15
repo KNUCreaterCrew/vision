@@ -9,8 +9,9 @@ def require_opencv():
         import cv2
     except ImportError as error:
         raise RuntimeError(
-            "OpenCV is unavailable. Use a standard CPython virtual environment and run "
-            "python -m pip install -r requirements.txt. See README.md for Windows setup."
+            "OpenCV is unavailable. Windows: install requirements.txt in a CPython venv. "
+            "Raspberry Pi OS: install python3-opencv and use a --system-site-packages venv. "
+            "See README.md for OS-specific setup."
         ) from error
     return cv2
 
@@ -20,7 +21,12 @@ def camera_session(index: int = 0):
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
         raise ValueError("camera index must be a nonnegative integer")
     cv2 = require_opencv()
-    backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+    if sys.platform == "win32":
+        backend = cv2.CAP_DSHOW
+    elif sys.platform.startswith("linux"):
+        backend = cv2.CAP_V4L2
+    else:
+        backend = cv2.CAP_ANY
     capture = cv2.VideoCapture(index, backend)
     try:
         if not capture.isOpened():

@@ -13,7 +13,7 @@ Update contracts in `zeroframe-docs` before changing APIs, events, or fields acr
 
 ## Architecture & State Rules
 
-Develop on a laptop with its built-in camera; validate Raspberry Pi 5 (8GB, no accelerator) separately. Compare NCNN/ONNX for YOLO11n. Validate VLM compatibility, accuracy, and performance before enabling it; keep YOLO independent and VLM concurrency at one. Reject stale results.
+Support Windows development and prioritize Raspberry Pi OS Linux deployment (Pi 5, 8GB). USB cameras use DirectShow/V4L2 respectively; CSI requires separate Picamera2 work. Calibration needs a local desktop. Validate Pi hardware and models separately; keep YOLO independent and VLM concurrency at one. Reject stale results.
 
 Use time-based debouncing. Start `UNKNOWN`; missing detections never establish `EMPTY`. Require sustained absence and current verification, including initial empty seats. Never generate `empty_verified` from missing detections. Expire unverified states after 30 seconds. Internal timestamps use monotonic seconds, not API timestamps. Future transport uses 10-second heartbeats and backend offline handling at 30 seconds. FPS/latency remain targets.
 
@@ -23,7 +23,8 @@ Python 3.10+. Run from the repository root:
 
 - `python -m zeroframe`: synthetic demo; no camera/model/network.
 - `python -m unittest discover -s tests -v`: unit tests.
-- `python -m pip install -r requirements.txt`: GUI OpenCV; use a standard CPython venv (Windows/MSYS2 instructions in README).
+- Windows: `python -m pip install -r requirements.txt` in a standard CPython venv.
+- Pi OS: install `python3-opencv` via apt, create `.venv` with `--system-site-packages`, and run `.venv/bin/python`. Avoid mixing pip/apt OpenCV.
 - `python calibrate.py --room IT4-101 --seats A-01 A-02`: ROI editor; JSON only. Existing files require `--overwrite`.
 
 Update progress after each stage.

@@ -1,7 +1,8 @@
 # ZeroFrame Vision
 
 프라이버시 보호형 좌석 탐지 시스템의 엣지 판정 모듈입니다.
-개발은 **Windows 노트북과 내장 카메라**로 진행하며, 최종 운영 대상은 Raspberry Pi 5(8GB, AI 가속기 없음)입니다.
+개발은 **Windows 노트북과 내장 카메라**로 진행하며, 우선 운영 대상은 **Raspberry Pi 5(8GB, AI 가속기 없음) + 64비트 Raspberry Pi OS + USB 웹캠**입니다.
+Windows와 Linux의 공통 코드를 유지하고, 플랫폼별 카메라 입력과 설치 방법을 구분합니다. 충돌하는 구현 선택은 Linux 운영 환경을 우선합니다.
 전체 요구사항은 [v1.1 명세서](zeroframe_v1.1_local_multimodal.md), 세부 검증 기록은 [구현 진행 기록](docs/implementation-plan.md)을 참고하세요.
 
 ## 전체 5단계와 현재 진행 상황
@@ -14,7 +15,7 @@
 | **4. 백엔드 전송** | 상태 JSON, 인증 헤더, 변경 전송, 10초 하트비트, 통신 실패 처리 | **미구현** | 테스트 수신 서버에서 계약 검증, 통신 지연·단절에도 분석 지속 |
 | **5. 선택적 VLM·최종 통합 검증** | 로컬 SmolVLM2 검증, 단일 워커·제한 큐·타임아웃·오래된 결과 폐기, 실제 백엔드 연동·현장 보정 | **미구현** | VLM 실패 시 안전한 대체 동작, 정확도·지연·RAM·프라이버시 점검 |
 
-**현재 확인된 내용:** 자동 테스트 52개가 통과했고, 사용자의 실행 로그에서 카메라 캘리브레이션 화면 진입을 확인했습니다.
+**현재 확인된 내용:** 자동 테스트 55개가 통과했고, 사용자의 실행 로그에서 Windows 카메라 캘리브레이션 화면 진입을 확인했습니다.
 좌표 JSON 저장 성공과 수정한 화면 안내의 실제 조작 결과는 아직 확인하지 않았습니다.
 지금 실행할 수 있는 것은 **가짜 관측 데모와 좌석 영역 지정 도구**입니다.
 실시간 사람·짐 자동 인식, 백엔드 전송, VLM은 아직 연결되지 않았습니다.
@@ -29,11 +30,13 @@ VLM을 제외하더라도 최종 통합·장애·품질 검증은 수행해야 �
 
 ## 설치 및 빠른 시작
 
-모든 명령은 **저장소 루트의 Windows PowerShell**에서 실행합니다.
-코드는 Python 3.10 이상을 대상으로 하며, 카메라 실행 안내는 Windows용 CPython 3.13(x64) 기준입니다.
-상태 데모와 자동 테스트는 표준 라이브러리만 사용하고, 카메라 도구에는 `requirements.txt`의 OpenCV가 필요합니다.
+명령은 **저장소 루트**에서 OS에 맞는 터미널로 실행합니다.
+코드는 Python 3.10 이상을 대상으로 하며, 상태 데모와 자동 테스트는 표준 라이브러리만 사용합니다.
+카메라 도구의 OpenCV는 Windows에서는 pip, Raspberry Pi OS에서는 운영체제 패키지로 설치합니다.
 
-### 처음 설치할 때
+### Windows 노트북: PowerShell
+
+일반 Windows용 CPython 3.13(x64) 기준입니다.
 
 ```powershell
 py -3.13 -m venv .venv
@@ -45,11 +48,62 @@ py -3.13 -m venv .venv
 가상환경 활성화 없이 실행하므로 PowerShell 실행 정책을 변경할 필요가 없습니다.
 설치 방식은 [Python Windows 공식 안내](https://docs.python.org/3.13/using/windows.html)를 참고하세요.
 
-화면 창을 사용하는 도구이므로 `opencv-python==4.13.0.92`를 사용합니다.
+Windows에서는 화면 창을 지원하는 `opencv-python==4.13.0.92`를 사용합니다.
 `headless` 또는 다른 OpenCV 배포판을 같은 환경에 함께 설치하지 마세요.
 [OpenCV 패키지 공식 안내](https://pypi.org/project/opencv-python/4.13.0.92/)
 
-### 목적별 실행 명령
+### Raspberry Pi OS 64비트 Linux: Bash
+
+현재 카메라 경로는 **USB 웹캠의 V4L2 입력**을 대상으로 합니다. Python 3.10 이상인 Raspberry Pi OS 환경에서 사용합니다.
+Pi의 로컬 데스크톱에서 모니터·마우스로 캘리브레이션합니다.
+Raspberry Pi OS Lite나 화면 없는 SSH 세션에서는 클릭 방식의 도구를 실행할 수 없습니다.
+
+```bash
+sudo apt update
+sudo apt install -y python3-opencv python3-venv v4l-utils
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -c "import cv2; print(cv2.__version__)"
+v4l2-ctl --list-devices
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python calibrate.py --room IT4-101 --seats A-01 --camera 0
+```
+
+`--system-site-packages`로 apt에서 설치한 OpenCV를 가상환경에서도 읽습니다.
+이 경로에서는 pip OpenCV를 추가로 설치하지 않습니다. `requirements.txt`의 OpenCV 항목은 Windows에서만 적용됩니다.
+Linux의 OpenCV 버전은 OS 패키지를 따르며, 실제 장비에서 GUI·V4L2 기능을 확인해야 합니다.
+[Debian OpenCV 패키지](https://packages.debian.org/trixie/python3-opencv), [Python venv 안내](https://docs.python.org/3/library/venv.html)
+
+장치 목록에서 USB 웹캠에 해당하는 번호를 선택하세요. 예를 들어 `/dev/video2`라면 `--camera 2`를 사용합니다.
+`v4l2-ctl --list-devices`는 장치 목록을 확인하는 명령이며 이미지를 저장하지 않습니다.
+[v4l2-ctl 공식 매뉴얼](https://manpages.debian.org/trixie/v4l-utils/v4l2-ctl.1.en.html)
+
+권한 오류가 나면 `ls -l /dev/video*`와 `id -nG`로 장치 권한과 사용자 그룹을 확인합니다.
+장치가 `video` 그룹 권한을 요구하고 사용자가 그 그룹에 없다면 `sudo usermod -aG video "$USER"` 후 다시 로그인합니다.
+[Raspberry Pi USB 웹캠 안내](https://www.raspberrypi.com/documentation/accessories/camera-software.html#use-a-usb-webcam)
+
+Windows에서 만든 `.venv`는 Pi로 복사하지 않고 Pi에서 새로 만듭니다.
+노트북의 좌표 파일도 재사용하지 말고 **Pi에 연결한 카메라의 실제 설치 각도·해상도로 다시 지정**합니다.
+이미지는 장치 내부에만 두므로 캘리브레이션 화면을 VNC나 SSH X11 포워딩으로 외부 전송하지 않습니다.
+
+### 지원 범위와 검증 상태
+
+| 항목 | Windows 노트북 | Raspberry Pi OS Linux |
+| :--- | :--- | :--- |
+| 상태 머신·ROI·JSON | 공통 Python 코드 | 동일 코드 |
+| 내장/USB 웹캠 | DirectShow 입력 | V4L2 USB 웹캠 입력 |
+| 클릭 캘리브레이션 | 로컬 OpenCV 창 | 로컬 데스크톱 OpenCV 창 필요 |
+| CSI 리본 케이블 카메라 | 대상 아님 | 현재 미지원; Picamera2 캡처 경로 별도 구현 필요 |
+| 실물 확인 | 사용자 카메라 화면 진입 확인 | Pi·웹캠 실물 미검증 |
+
+USB 웹캠과 CSI 카메라의 소프트웨어 경로를 혼동하지 마세요.
+CSI 모듈은 libcamera 기반 Picamera2 경로를 확인해야 하며 현재 `--camera` 번호만 바꿔서 지원된다고 보장하지 않습니다.
+[Raspberry Pi Picamera2 안내](https://www.raspberrypi.com/documentation/accessories/camera-software.html#use-libcamera-from-python-with-picamera2)
+
+Windows/Linux 백엔드 선택과 화면 없는 Linux 오류 처리는 모의 테스트를 통과했습니다.
+Linux 분기를 시뮬레이션한 테스트이며 실제 Linux OS·ARM64·카메라 드라이버를 실행한 결과는 아닙니다.
+YOLO/VLM은 미구현이므로 모델 호환성이나 Pi 성능도 아직 확인하지 않았습니다.
+
+### 목적별 실행 명령 (Windows)
 
 | 목적 | 명령 |
 | :--- | :--- |
@@ -63,6 +117,7 @@ py -3.13 -m venv .venv
 `--overwrite`는 새로 지정한 좌석 목록으로 **파일 전체를 교체**합니다. 위 예시는 좌석 하나만 저장하므로,
 두 좌석을 유지하려면 `--seats A-01 A-02`를 지정하세요.
 YOLO·서버 전송·VLM 실행 명령은 구현 후 추가합니다.
+Linux에서는 위 표의 `.\.venv\Scripts\python.exe`를 `.venv/bin/python`으로 바꾸고 Bash에서 실행합니다.
 
 ## 1단계: 상태 판정 데모와 테스트
 
@@ -73,9 +128,9 @@ YOLO·서버 전송·VLM 실행 명령은 구현 후 추가합니다.
 데모의 `3s`는 사람 탐지가 2초간 지속된 시점, `8s`는 짐만 보이는 상태가 4초간 지속된 시점입니다.
 `14s`에는 테스트용 빈자리 검증 신호를 넣고, `44s`에는 마지막 유효 판정 후 30초 만료를 확인합니다.
 
-현재 자동 테스트는 상태 머신 25개, ROI·카메라·도구 제어 27개로 총 52개입니다.
+현재 자동 테스트는 상태 머신 25개, ROI·카메라·도구 제어 30개로 총 55개입니다.
 카메라와 화면 이벤트는 가짜 입력으로 검증하므로 테스트 통과가 실제 영상의 인식 정확도를 뜻하지 않습니다.
-테스트 출력 마지막의 `Ran 52 tests`와 `OK`를 확인하세요.
+테스트 출력 마지막의 `Ran 55 tests`와 `OK`를 확인하세요.
 가상환경이 없어도 `python -m zeroframe`, `python -m unittest discover -s tests -v`는 실행할 수 있습니다.
 
 ## 2단계: 노트북 카메라로 좌석 지정
@@ -120,6 +175,7 @@ New-Item -ItemType Directory -Force .\local
 ```
 
 카메라 위치·해상도가 바뀌면 다시 캘리브레이션해야 합니다.
+Linux에서 별도 폴더를 만들 때는 `New-Item` 대신 `mkdir -p local`을 사용합니다.
 
 ### 옵션
 
@@ -143,6 +199,7 @@ Get-Content -Encoding UTF8 .\roi_config.json
 파일에는 `room_id`, `frame_width`, `frame_height`, `seats`만 들어갑니다.
 각 좌석은 `seat_id`와 `polygon` 좌표를 가집니다. 해상도는 요청한 640×480이 아니라 **실제 캡처된 크기**를 저장합니다.
 다른 `--output`을 사용했다면 위 명령의 파일명도 바꾸세요.
+Linux에서는 `Get-Content` 대신 `cat roi_config.json`, Python 실행 경로는 `.venv/bin/python`을 사용합니다.
 
 ## 자주 발생하는 문제
 
@@ -154,6 +211,9 @@ Get-Content -Encoding UTF8 .\roi_config.json
 | 키가 먹히지 않음 | 터미널 대신 카메라 창을 클릭해 포커스를 둡니다. 수정한 코드는 프로그램을 종료하고 다시 실행해야 적용됩니다. |
 | `already exists` | 기존 파일이 있습니다. 다른 `--output`을 쓰거나 전체 교체 의도로 `--overwrite`를 지정하세요. |
 | `Cannot open camera` / `Camera frame unavailable` | Windows 카메라 권한, 다른 앱의 점유, 카메라 번호를 확인합니다. 다른 장치는 `--camera 1`로 선택할 수 있습니다. |
+| Linux에서 카메라를 열지 못함 | `v4l2-ctl --list-devices`로 USB 웹캠 번호를 확인하고 장치 권한·`video` 그룹을 점검합니다. CSI 모듈은 현재 캡처 경로의 대상이 아닙니다. |
+| `Calibration needs a local Linux desktop` | 화면 없는 SSH/Lite 환경입니다. 모니터·마우스가 연결된 Pi의 로컬 데스크톱에서 실행합니다. 상태 데모·자동 테스트는 화면 없이 실행할 수 있습니다. |
+| Linux 가상환경에서 `OpenCV is unavailable` | apt의 `python3-opencv` 설치 여부와 `.venv` 생성 시 `--system-site-packages` 사용 여부를 확인합니다. |
 | `OpenCV is unavailable` / `No module named cv2` | 패키지를 설치한 가상환경의 Python으로 실행하는지 확인합니다. 위 설치 명령을 사용하세요. |
 | `externally-managed-environment` | MSYS2 Python의 시스템 환경에 설치하려고 한 경우입니다. Windows CPython으로 만든 `.venv`를 사용하세요. |
 | `py -3.13` 실행 실패 / `did not find executable` | Windows Python 설치·등록 또는 가상환경의 원본 Python 경로를 확인합니다. 원본 Python을 옮기거나 제거했다면 가상환경도 다시 준비해야 합니다. |
