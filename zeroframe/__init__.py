@@ -1,0 +1,1 @@
+"""ZeroFrame edge seat detection."""
