@@ -11,6 +11,10 @@ Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`
 
 Update contracts in `zeroframe-docs` before changing APIs, events, or fields across implementations.
 
+## Current Implementation Status
+
+Stages 1–2 are implemented; stage 3 includes YOLO, the desktop launcher, and upper-body ROI mapping, with field validation pending. Windows YOLO success is user-reported; the latest 96 automated tests use simulated model/camera inputs. Stage 4 transport and stage 5 VLM/integration remain unimplemented. Keep README, this guide, the specification, and `docs/implementation-plan.md` consistent; distinguish working code, user reports, simulations, and hardware evidence.
+
 ## Architecture & State Rules
 
 Support Windows development and prioritize Raspberry Pi OS Linux deployment (Pi 5, 8GB). USB cameras use DirectShow/V4L2 respectively; CSI requires separate Picamera2 work. Calibration needs a local desktop. Validate Pi hardware and models separately; keep YOLO independent and VLM concurrency at one. Reject stale results.
