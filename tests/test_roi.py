@@ -80,6 +80,47 @@ class PolygonTests(unittest.TestCase):
             config().matching_seat_ids((20, 20, 40, 40), frame_width=1280, frame_height=720)
 
 
+class OverlapTests(unittest.TestCase):
+    def overlaps(self, roi, bbox):
+        return roi.overlapping_seat_ratios(bbox, frame_width=640, frame_height=480)
+
+    def test_clipped_body_at_frame_bottom_still_overlaps_seat(self):
+        roi = config(SeatROI("A", ((40, 100), (280, 100), (280, 479), (40, 479))))
+        bbox = (100, 120, 200, 480)
+        self.assertEqual(match(roi, bbox), ())
+        self.assertAlmostEqual(self.overlaps(roi, bbox)["A"], 359 / 360)
+
+    def test_ratio_uses_person_box_area_and_excludes_boundary_only_contact(self):
+        self.assertEqual(self.overlaps(config(), (20, 20, 40, 40)), {"A-01": 1})
+        self.assertAlmostEqual(self.overlaps(config(), (0, 0, 200, 200))["A-01"], 8100 / 40000)
+        self.assertEqual(self.overlaps(config(), (100, 20, 120, 50)), {})
+        self.assertEqual(self.overlaps(config(), (110, 20, 120, 50)), {})
+        self.assertAlmostEqual(self.overlaps(config(), (99.5, 20, 100.5, 30))["A-01"], .5)
+
+    def test_triangle_and_concave_polygon_use_actual_area_in_both_windings(self):
+        cases = (
+            (((0, 0), (100, 0), (0, 100)), (0, 0, 100, 100), .5),
+            (((0, 0), (100, 0), (100, 30), (30, 30), (30, 100), (0, 100)),
+             (20, 20, 80, 80), 1100 / 3600),
+            (((10, 10), (110, 10), (110, 110), (80, 110), (80, 40), (40, 40),
+              (40, 110), (10, 110)), (0, 60, 120, 100), .5),
+        )
+        for polygon, bbox, expected in cases:
+            for points in (polygon, polygon[::-1]):
+                with self.subTest(polygon=points):
+                    self.assertAlmostEqual(self.overlaps(config(SeatROI("A", points)), bbox)["A"], expected)
+        cutout = config(SeatROI("L", cases[1][0]))
+        self.assertEqual(self.overlaps(cutout, (40, 40, 60, 60)), {})
+
+    def test_overlap_rejects_invalid_bounds_and_changed_resolution(self):
+        for bbox in ((0, 0, 0, 1), (-1, 0, 1, 1), (0, 0, 641, 480),
+                     (0, 0, float("nan"), 1), (0, 0, 1e-300, 1e-300)):
+            with self.subTest(bbox=bbox), self.assertRaises(ValueError):
+                self.overlaps(config(), bbox)
+        with self.assertRaisesRegex(ValueError, "resolution"):
+            config().overlapping_seat_ratios((0, 0, 1, 1), frame_width=320, frame_height=240)
+
+
 class ConfigurationTests(unittest.TestCase):
     def test_invalid_ids_dimensions_seats_and_coordinates(self):
         for room, seats in (("", ["A"]), ("room", []), (" room", ["A"]), ("room", ["A", "A"]), ("room", ["A\n"]), (None, ["A"])):

@@ -1,4 +1,4 @@
-"""Validated, image-free seat coordinates and bottom-center object mapping."""
+"""Validated seat coordinates, bottom-center mapping, and polygon/box overlap."""
 
 import json
 import os
@@ -65,6 +65,33 @@ def _contains(polygon, point):
     return inside
 
 
+def _polygon_box_area(polygon, bbox):
+    # Clip against the four rectangle half-planes; preserves concave ROI area.
+    points = list(polygon)
+    x1, y1, x2, y2 = bbox
+    for axis, bound, lower in ((0, x1, True), (0, x2, False), (1, y1, True), (1, y2, False)):
+        if not points:
+            return 0.0
+        clipped = []
+        a = points[-1]
+        a_inside = a[axis] >= bound if lower else a[axis] <= bound
+        for b in points:
+            b_inside = b[axis] >= bound if lower else b[axis] <= bound
+            if a_inside != b_inside:
+                other = 1 - axis
+                t = (bound - a[axis]) / (b[axis] - a[axis])
+                crossing = [0.0, 0.0]
+                crossing[axis] = bound
+                crossing[other] = a[other] + t * (b[other] - a[other])
+                clipped.append(tuple(crossing))
+            if b_inside:
+                clipped.append(b)
+            a, a_inside = b, b_inside
+        points = clipped
+    return abs(sum(a[0] * b[1] - b[0] * a[1]
+                   for a, b in zip(points, points[1:] + points[:1]))) / 2
+
+
 @dataclass(frozen=True)
 class SeatROI:
     seat_id: str
@@ -116,8 +143,7 @@ class ROIConfig:
                 raise ValueError(f"{seat.seat_id}: polygon exceeds the calibrated frame")
         object.__setattr__(self, "seats", tuple(self.seats))
 
-    def matching_seat_ids(self, bbox, *, frame_width: int, frame_height: int) -> tuple[str, ...]:
-        """Return every candidate; multiple matches must be treated as ambiguous."""
+    def _validate_bbox(self, bbox, frame_width, frame_height):
         _dimension(frame_width, "frame_width")
         _dimension(frame_height, "frame_height")
         if (frame_width, frame_height) != (self.frame_width, self.frame_height):
@@ -132,8 +158,27 @@ class ROIConfig:
         x1, y1, x2, y2 = bbox
         if not (0 <= x1 < x2 <= frame_width and 0 <= y1 < y2 <= frame_height):
             raise ValueError("bbox must have positive area and fit inside the frame")
+
+    def matching_seat_ids(self, bbox, *, frame_width: int, frame_height: int) -> tuple[str, ...]:
+        """Bottom-center candidates for belongings; multiple matches are ambiguous."""
+        self._validate_bbox(bbox, frame_width, frame_height)
+        x1, y1, x2, y2 = bbox
         point = ((x1 + x2) / 2, y2)
         return tuple(seat.seat_id for seat in self.seats if _contains(seat.polygon, point))
+
+    def overlapping_seat_ratios(self, bbox, *, frame_width: int, frame_height: int) -> dict[str, float]:
+        """Fraction of the visible detection box inside each seat; omit zero-area contact."""
+        self._validate_bbox(bbox, frame_width, frame_height)
+        x1, y1, x2, y2 = bbox
+        box_area = (x2 - x1) * (y2 - y1)
+        if not isfinite(box_area) or box_area <= 0:
+            raise ValueError("bbox area must be finite and positive")
+        ratios = {}
+        for seat in self.seats:
+            area = _polygon_box_area(seat.polygon, bbox)
+            if area > 0:
+                ratios[seat.seat_id] = min(area / box_area, 1.0)
+        return ratios
 
     def to_dict(self):
         return {

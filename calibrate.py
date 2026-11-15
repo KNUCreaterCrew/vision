@@ -63,6 +63,7 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
 
         cv2.setMouseCallback(WINDOW, on_mouse)
         print("Click corners in order; N/ENTER confirms a seat; U undoes; S saves; Q/ESC cancels.")
+        print("Include the seated head/shoulders/upper-body area, not just the desk surface.")
         print(f"Requested seats: {', '.join(seat_ids)}. Start with {seat_ids[0]}.")
         while True:
             display = snapshot.copy()
@@ -77,8 +78,9 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
             )
             cv2.putText(display, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 1)
             cv2.putText(display, "Click corners | N: next | U: undo | S: save | Q: cancel", (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            cv2.putText(display, "ROI: include seated head/shoulders, not just desk", (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
             if message:
-                cv2.putText(display, "Invalid or unfinished ROI; see terminal", (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+                cv2.putText(display, "Invalid or unfinished ROI; see terminal", (10, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
             cv2.imshow(WINDOW, display)
             key = cv2.waitKey(20) & 0xFF
             if key in (27, ord("q")) or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:

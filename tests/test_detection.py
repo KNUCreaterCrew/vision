@@ -53,6 +53,48 @@ class MappingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inside"):
             self.observations([Detection(0, .9, (100, 120, 800, 300))])
 
+    def test_person_maps_when_bottom_center_is_below_seat_or_cut_off_at_frame_edge(self):
+        for bottom in (450, 480):
+            with self.subTest(bottom=bottom):
+                result = self.observations([Detection(0, .9, (100, 120, 200, bottom))])
+                self.assertTrue(result["A-01"].person)
+                self.assertTrue(result["A-01"].view_clear)
+                self.assertFalse(result["A-02"].person)
+
+    def test_weak_body_overlap_blocks_belongings_only_confirmation(self):
+        result = self.observations([
+            Detection(0, .9, (100, 0, 200, 150)),
+            Detection(63, .9, (100, 120, 200, 300)),
+        ])
+        self.assertFalse(result["A-01"].person)
+        self.assertTrue(result["A-01"].belongings)
+        self.assertFalse(result["A-01"].view_clear)
+
+    def test_half_box_overlap_is_required_and_frame_side_clipping_is_supported(self):
+        for bbox, seat_id, accepted in (
+            ((100, 0, 200, 200), "A-01", True),
+            ((100, 0, 200, 199.9), "A-01", False),
+            ((0, 120, 200, 300), "A-01", True),
+            ((500, 120, 640, 300), "A-02", True),
+        ):
+            with self.subTest(bbox=bbox):
+                result = self.observations([Detection(0, .9, bbox)])
+                self.assertEqual(result[seat_id].person, accepted)
+                self.assertEqual(result[seat_id].view_clear, accepted)
+
+    def test_body_spanning_adjacent_seats_is_ambiguous_without_overlapping_polygons(self):
+        config = ROIConfig("room", 640, 480, (
+            SeatROI("one", ((0, 0), (200, 0), (200, 400), (0, 400))),
+            SeatROI("two", ((200, 0), (400, 0), (400, 400), (200, 400))),
+        ))
+        result = self.observations([Detection(0, .9, (100, 120, 250, 300))], config)
+        for observation in result.values():
+            self.assertFalse(observation.person)
+            self.assertFalse(observation.view_clear)
+        touching = self.observations([Detection(0, .9, (100, 120, 200, 300))], config)
+        self.assertTrue(touching["one"].person)
+        self.assertTrue(touching["two"].view_clear)
+
     def test_detection_rejects_invalid_metadata(self):
         for cls, confidence, bbox in (
             (True, .9, (0, 0, 1, 1)), (-1, .9, (0, 0, 1, 1)),
@@ -105,6 +147,13 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(result["A-01"].last_observed_at, 2)
         result = self.tracker.tick(32)
         self.assertEqual(result["A-01"].status, Status.UNKNOWN)
+
+    def test_clipped_upper_body_can_confirm_occupied_without_visible_feet(self):
+        person = Detection(0, .9, (100, 120, 200, 480))
+        for second in (0, 1, 2):
+            result = self.update(second, [person])
+        self.assertEqual(result["A-01"].status, Status.OCCUPIED)
+        self.assertEqual(result["A-02"].status, Status.UNKNOWN)
 
     def test_invalid_completion_times_do_not_modify_states(self):
         before = self.tracker.tick(10)

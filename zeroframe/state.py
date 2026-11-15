@@ -31,7 +31,7 @@ def _validate_seconds(name: str, value: float, *, positive: bool = False) -> Non
 
 
 @dataclass(frozen=True)
-class TransitionPolicy:
+class TransitionPolicy: #상태확정에 필요한 시간
     occupied_seconds: float = 2.0
     away_seconds: float = 3.0
     occupied_to_away_seconds: float = 4.0
@@ -128,7 +128,7 @@ class SeatStateMachine:
                 self._unknown(reason, now)
             return self._state
 
-        if observation.person:
+        if observation.person: #사람이면 occupied 물건만 있으면 away
             candidate = Status.OCCUPIED
             delay = self.policy.occupied_seconds
         elif observation.belongings:

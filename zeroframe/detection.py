@@ -38,24 +38,32 @@ class Detection:
         object.__setattr__(self, "bbox", tuple(self.bbox))
 
     @property
-    def accepted(self):
+    def accepted(self): #사람 0.5 물건 0.45 신뢰도
         return self.class_id in CLASSES and self.confidence >= (
             0.50 if self.class_id == 0 else 0.45
         )
 
 
-def seat_observations(config, detections, *, observed_at, frame_width, frame_height):
+def seat_observations(config, detections, *, observed_at, frame_width, frame_height): #탐지 결과를 좌석 매핑 및 사람, 물건신호로 분류
     if (frame_width, frame_height) != (config.frame_width, config.frame_height):
         raise ValueError("frame resolution changed; recalibrate instead of silently scaling ROIs")
     signals = {seat.seat_id: {"person": False, "belongings": False, "view_clear": True}
                for seat in config.seats}
     for detection in detections:
-        candidates = config.matching_seat_ids(
-            detection.bbox, frame_width=frame_width, frame_height=frame_height
-        )
+        strong_overlap = True
+        if detection.class_id == 0:
+            overlaps = config.overlapping_seat_ratios(
+                detection.bbox, frame_width=frame_width, frame_height=frame_height
+            )
+            candidates = tuple(overlaps)
+            strong_overlap = len(candidates) == 1 and overlaps[candidates[0]] >= 0.5
+        else:
+            candidates = config.matching_seat_ids(
+                detection.bbox, frame_width=frame_width, frame_height=frame_height
+            )
         if detection.class_id not in CLASSES:
             continue
-        if len(candidates) != 1 or not detection.accepted:
+        if len(candidates) != 1 or not detection.accepted or not strong_overlap:
             for seat_id in candidates:
                 signals[seat_id]["view_clear"] = False
             continue
