@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; editor: `calibrate.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Hardware/model verification remains pending.
+Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; YOLO/mapping: `zeroframe/detection.py`; editor: `calibrate.py`; runtime: `run_vision.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Hardware/model verification remains pending.
 
 - `zeroframe-vision`: Python, YOLO11n, ROI, state transitions, optional local SmolVLM2-256M.
 - `zeroframe-backend`: authenticated ingestion, freshness, WebSocket; framework undecided.
@@ -26,6 +26,8 @@ Python 3.10+. Run from the repository root:
 - Windows: `python -m pip install -r requirements.txt` in a standard CPython venv.
 - Pi OS: install `python3-opencv` via apt, create `.venv` with `--system-site-packages`, and run `.venv/bin/python`. Avoid mixing pip/apt OpenCV.
 - `python calibrate.py --room IT4-101 --seats A-01 A-02`: ROI editor; JSON only. Existing files require `--overwrite`.
+- Windows YOLO: install `requirements-yolo.txt`; Pi: use README's apt/pip split to preserve apt OpenCV. Pin Ultralytics 8.3.253 until predictor buffer cleanup is rechecked.
+- `python run_vision.py --config roi_config.json --model local/yolo11n.pt --preview`: local inference; omit preview for headless Linux. Prepare trusted model files before camera startup; runtime downloads/auto-installs are disabled. Stage 3 never verifies `EMPTY`.
 
 Update progress after each stage.
 

@@ -1,8 +1,9 @@
 from types import SimpleNamespace
+from threading import Event
 import unittest
 from unittest.mock import Mock, patch
 
-from zeroframe.camera import camera_session, read_frame, require_opencv
+from zeroframe.camera import LatestCamera, camera_session, read_frame, require_opencv
 
 
 class CameraTests(unittest.TestCase):
@@ -72,6 +73,46 @@ class CameraTests(unittest.TestCase):
         with patch.dict("sys.modules", {"cv2": None}):
             with self.assertRaisesRegex(RuntimeError, "requirements.txt"):
                 require_opencv()
+
+    def test_latest_camera_keeps_only_newest_frame_and_stops_reader(self):
+        cv, capture = self.cv()
+        second_read = Event()
+        finish = Event()
+        frames = [SimpleNamespace(size=1), SimpleNamespace(size=2)]
+        calls = 0
+
+        def read():
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                return True, frames[calls - 1]
+            second_read.set()
+            if not finish.wait(1):
+                raise RuntimeError("test reader was not released")
+            return True, frames[-1]
+
+        capture.read.side_effect = read
+        with patch("zeroframe.camera.require_opencv", return_value=cv), \
+             patch("zeroframe.camera.monotonic", return_value=10):
+            with LatestCamera() as stream:
+                try:
+                    self.assertTrue(second_read.wait(1))
+                    self.assertIs(stream.read_after(0)[1], frames[1])
+                    self.assertIsNone(stream.read_after(10, timeout=0))
+                finally:
+                    stream._stop.set()
+                    finish.set()
+            self.assertIsNone(stream._latest)
+        capture.release.assert_called_once()
+
+    def test_latest_camera_propagates_failure_and_releases_device(self):
+        cv, capture = self.cv()
+        capture.read.return_value = (False, None)
+        with patch("zeroframe.camera.require_opencv", return_value=cv):
+            with LatestCamera() as stream:
+                with self.assertRaisesRegex(RuntimeError, "frame unavailable"):
+                    stream.read_after(0, timeout=1)
+        capture.release.assert_called_once()
 
 
 if __name__ == "__main__":

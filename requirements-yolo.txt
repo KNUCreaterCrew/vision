@@ -1,0 +1,4 @@
+# Windows stage 3 runtime. Pi: use README's apt/pip split to preserve apt OpenCV.
+# State/ROI tests remain standard-library only.
+-r requirements.txt
+ultralytics==8.3.253

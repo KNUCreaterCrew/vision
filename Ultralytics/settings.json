@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "C:\\Users\\akgus\\OneDrive\\\ubc14\ud0d5 \ud654\uba74\\KNU\\4-1\\datasets",
+  "weights_dir": "C:\\Users\\akgus\\OneDrive\\\ubc14\ud0d5 \ud654\uba74\\KNU\\4-1\\CSE_HakerTon\\weights",
+  "runs_dir": "C:\\Users\\akgus\\OneDrive\\\ubc14\ud0d5 \ud654\uba74\\KNU\\4-1\\CSE_HakerTon\\runs",
+  "uuid": "85a963cf2b36db8fec8295380c5d990a31e615cb94ca9b69d27df9c00d8817f9",
+  "sync": false,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": false,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}
