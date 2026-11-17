@@ -15,8 +15,8 @@ Windows와 Linux의 공통 코드를 유지하고, 플랫폼별 카메라 입력
 | **4. 백엔드 전송** | 상태 JSON, 인증 헤더, 변경 전송, 10초 하트비트, 통신 실패 처리 | **미구현** | 테스트 수신 서버에서 계약 검증, 통신 지연·단절에도 분석 지속 |
 | **5. 선택적 VLM·최종 통합 검증** | 로컬 SmolVLM2 검증, 단일 워커·제한 큐·타임아웃·오래된 결과 폐기, 실제 백엔드 연동·현장 보정 | **미구현** | VLM 실패 시 안전한 대체 동작, 정확도·지연·RAM·프라이버시 점검 |
 
-**현재 위치는 3단계 기능 구현 후 현장 검증입니다.** 최근 전체 자동 테스트 96개 통과. 사용자가 좌석 설정 후 Windows 노트북에서 YOLO 실행 성공을 알려주었습니다.
-인식 정확도·FPS를 계측한 결과는 아니며 Pi 검증은 남아 있습니다.
+**현재 위치는 3단계 기능 구현 후 현장 검증입니다.** 최근 Pi ARM64 / Python 3.13.5에서 전체 자동 테스트 112개 통과. 사용자가 좌석 설정 후 Windows 노트북에서 YOLO 실행 성공을 알려주었습니다.
+Pi 5에서는 C270 USB 웹캠의 실제 프레임 60개 수신, 로컬 Tk 시작 창 생성, 검은 합성 프레임의 실제 모델 추론을 확인했습니다. 실제 좌석 추론·인식 정확도·FPS 검증은 남아 있습니다.
 **`main.py` 시작 창, 가짜 관측 데모, 좌석 영역 지정 도구, 로컬 YOLO 실행기**가 있습니다.
 시작 창은 실제 Tk 생성·위젯 배치와 실행 흐름의 모의 테스트를 확인했으며, 새 GUI와 실제 카메라의 전체 연속 조작은 확인 대기입니다.
 백엔드 전송과 VLM은 아직 연결되지 않았습니다.
@@ -30,7 +30,7 @@ Windows와 Linux의 공통 코드를 유지하고, 플랫폼별 카메라 입력
 상반신 대응은 **탐지된 사람을 좌석에 연결하는 규칙의 개선**입니다. 실제 뒷모습에서 `person` 상자를 생성하는 인식률은 확인해야 합니다.
 좌석 일괄 생성·자동 캘리브레이션, 서버 전송, VLM 검증기는 현재 제공하지 않습니다.
 
-3단계는 먼저 노트북에서 동작을 확인하고, Pi 확보 후 NCNN/ONNX 경로를 같은 조건에서 비교합니다.
+3단계의 다음 검증은 현재 연결된 Pi에서 좌석을 다시 지정하고 NCNN/ONNX 경로를 같은 조건에서 비교하는 것입니다.
 5단계의 **VLM은 선택 기능**입니다. 모델·런타임 호환성, 정확도, 자원 사용량을 실측한 뒤 활성화합니다.
 VLM을 제외하더라도 최종 통합·장애·품질 검증은 수행해야 합니다.
 검증 없는 빈자리를 임의로 확정하지 않으므로 VLM 미사용 시 일부 좌석이 `UNKNOWN`으로 남을 수 있습니다.
@@ -40,13 +40,24 @@ VLM을 제외하더라도 최종 통합·장애·품질 검증은 수행해야 �
 
 ## 평소에는 main.py 하나로 실행
 
-이미 카메라와 YOLO를 실행했다면 추가 pip 패키지 설치 없이 아래 파일만 실행하세요.
+최초 설치가 끝났다면 VS Code에서 **이 저장소 폴더를 열고 `main.py` → Ctrl+F5**로 시작합니다.
+`.vscode/launch.json`이 Pi/Linux에서는 `.venv/bin/python`, Windows에서는 `.venv/Scripts/python.exe`를 직접 선택합니다.
+상단 Python 실행 버튼도 프로젝트 가상환경으로 열린 파일을 실행합니다. [VS Code 실행 설정 안내](https://code.visualstudio.com/docs/python/debugging)
+현재 Pi에는 가상환경·apt OpenCV·CPU용 추론 패키지와 `local/yolo11n.pt`를 준비했습니다.
+Windows에서 사용하던 `Scripts/python.exe` 경로는 Pi에서 실행할 수 없습니다.
+
+터미널에서 직접 실행할 때는 OS에 맞는 명령을 사용하세요.
+
+```bash
+# Raspberry Pi / Linux
+.venv/bin/python main.py
+```
 
 ```powershell
+# Windows
 .\.venv\Scripts\python.exe main.py
 ```
 
-VS Code에서는 Python 인터프리터를 `.venv\Scripts\python.exe`로 선택한 뒤 `main.py`를 실행해도 됩니다.
 파일 더블클릭은 Windows의 Python 연결 설정에 따라 다른 인터프리터를 사용할 수 있습니다.
 
 1. 시작 창에서 **방 ID, 좌석 ID, 카메라 번호, 모델 경로**를 확인합니다. 저장된 `roi_config.json`이 있으면 방·좌석을 자동으로 읽습니다.
@@ -58,7 +69,7 @@ VS Code에서는 Python 인터프리터를 `.venv\Scripts\python.exe`로 선택�
    오류는 시작 창의 대화상자로 안내합니다.
 
 카메라 작업 중에는 시작 창을 숨기고 기존 OpenCV 화면을 사용합니다. 모델 로딩 중에는 화면이 열리기까지 잠시 기다려 주세요.
-이 방식은 로컬 데스크톱용이며 이미지를 파일이나 웹으로 보내지 않습니다. 모델 자동 다운로드·자동 설치 기능은 없습니다.
+기본 실행은 로컬 데스크톱용입니다. 개발용 SSH 화면 공유는 아래의 명시적 예외를 따르며 이미지 저장·녹화는 허용하지 않습니다. 모델 자동 다운로드·자동 설치 기능은 없습니다.
 최초 설치는 아래 절차가 필요하고, 기본 파일은 저장소의 `roi_config.json`, `local/yolo11n.pt`입니다.
 NCNN 모델은 폴더 경로를 입력할 수 있습니다. 다른 이름의 좌표를 사용하는 고급 실행은 기존 CLI를 사용하세요.
 
@@ -70,7 +81,41 @@ sudo apt install -y python3-tk
 ```
 
 Tkinter는 [Python 기본 GUI 인터페이스](https://docs.python.org/3/library/tkinter.html)이며 Windows Python에서는 Tcl/Tk 구성 요소가 설치되어 있어야 합니다.
-화면 없는 Pi/SSH 운영은 기존 `run_vision.py`를 `--preview` 없이 실행합니다.
+Remote-SSH에서 `DISPLAY`가 없고 같은 사용자의 로컬 X 화면이 하나 있으면 `main.py`가 자동 선택합니다.
+창은 Pi의 데스크톱에 열립니다. Pi 데스크톱에 먼저 로그인하세요. 기존 `DISPLAY` 설정은 유지합니다.
+로컬 화면이 없거나 후보가 여러 개라면 자동 선택하지 않습니다. 화면 없는 Pi/SSH 운영은 기존 `run_vision.py`를 `--preview` 없이 실행합니다.
+
+### 개발용: 노트북 SSH 접속에서 화면 조작
+
+**2026-11-17 사용자 승인:** 개발·캘리브레이션 중에는 신뢰하는 노트북으로 SSH 암호화 터널을 통해 화면을 전송할 수 있습니다.
+운영·시연 배포의 비영상 메타데이터 전송 원칙과 이미지 저장·녹화·외부 이미지 API 금지는 유지합니다.
+
+1. 노트북 VS Code에서 Remote-SSH로 Pi에 연결하고 이 저장소를 엽니다.
+2. `main.py`에서 **Ctrl+F5** 또는 일반 **Python 파일 실행** 버튼을 누릅니다. Linux에서는 SSH 접속을 직접 감지해 화면 공유도 함께 시작하므로 실행 설정의 환경 변수가 없어도 동작합니다.
+3. **포트(Ports)** 탭에 `6080 / ZeroFrame 개발 화면`이 표시됩니다. 자동으로 열린 노트북 브라우저에서 시작 창과 카메라 창을 조작하세요.
+4. 자동 연결이 안 되면 포트 탭에서 `6080`을 전달하고 **브라우저에서 열기**를 누릅니다. 노트북 쪽 포트가 바뀌었다면 포트 탭의 전달 주소를 사용합니다.
+5. 시작 창의 **종료** 또는 Ctrl+C로 끝내면 화면 공유 서버도 종료됩니다. 브라우저 탭만 닫으면 앱은 계속 실행됩니다.
+
+최초 패키지 준비와 VS Code 밖에서의 실행은 다음과 같습니다. 현재 Pi에는 패키지를 설치했습니다.
+
+```bash
+sudo apt install -y wayvnc novnc websockify util-linux
+.venv/bin/python main.py --dev-remote
+```
+
+SSH에서도 로컬 창만 사용하려면 `.venv/bin/python main.py --local`로 실행합니다.
+페이지가 계속 로딩되면 Pi 터미널에서 `curl -fsS http://127.0.0.1:6080/`을 확인하세요. 연결 거부는 앱 서버가 켜지지 않은 상태입니다.
+앱을 다시 실행하고 포트 탭의 전달 주소를 새로 열어야 합니다. `main.py`를 닫은 동안에는 해당 주소도 응답하지 않습니다.
+
+VS Code 없이 접속한다면 **노트북 터미널**에서 터널을 열고 노트북 브라우저로 `http://127.0.0.1:6080/`에 접속합니다.
+
+```bash
+ssh -N -L 127.0.0.1:6080:127.0.0.1:6080 akgusgh1234@192.168.0.14
+```
+
+`zeroframe/dev_remote.py`가 기존 Wayland 데스크톱과 마우스·키보드를 공유합니다. Pi가 부팅된 뒤 데스크톱에 로그인돼 있어야 하며 Lite OS의 가상 화면 생성은 제공하지 않습니다.
+WayVNC는 사용자 전용 임시 디렉터리의 Unix 소켓, 브라우저 서버는 `127.0.0.1:6080`에서만 대기합니다. 영구 서비스나 공개 포트를 만들지 않습니다.
+임시 파일은 웹 클라이언트 경로·HTML뿐이며 카메라 이미지를 저장하지 않습니다. 노트북에서의 실제 브라우저 조작과 장비별 스왑·캐시 동작은 별도로 확인해야 합니다.
 
 ## 최초 설치 및 CLI 실행
 
@@ -99,7 +144,7 @@ Windows에서는 화면 창을 지원하는 `opencv-python==4.13.0.92`를 사용
 ### Raspberry Pi OS 64비트 Linux: Bash
 
 현재 카메라 경로는 **USB 웹캠의 V4L2 입력**을 대상으로 합니다. Python 3.10 이상인 Raspberry Pi OS 환경에서 사용합니다.
-Pi의 로컬 데스크톱에서 모니터·마우스로 캘리브레이션합니다.
+Pi의 데스크톱 세션에서 로컬 마우스 또는 위의 승인된 개발용 원격 화면으로 캘리브레이션합니다.
 Raspberry Pi OS Lite나 화면 없는 SSH 세션에서는 클릭 방식의 도구를 실행할 수 없습니다.
 
 ```bash
@@ -127,7 +172,7 @@ Linux의 OpenCV 버전은 OS 패키지를 따르며, 실제 장비에서 GUI·V4
 
 Windows에서 만든 `.venv`는 Pi로 복사하지 않고 Pi에서 새로 만듭니다.
 노트북의 좌표 파일도 재사용하지 말고 **Pi에 연결한 카메라의 실제 설치 각도·해상도로 다시 지정**합니다.
-이미지는 장치 내부에만 두므로 캘리브레이션 화면을 VNC나 SSH X11 포워딩으로 외부 전송하지 않습니다.
+운영에서는 캘리브레이션 화면을 외부 전송하지 않습니다. 개발 중에는 위의 승인된 SSH 터널 화면 공유를 사용할 수 있습니다.
 
 ### 지원 범위와 검증 상태
 
@@ -137,15 +182,15 @@ Windows에서 만든 `.venv`는 Pi로 복사하지 않고 Pi에서 새로 만듭
 | 내장/USB 웹캠 | DirectShow 입력 | V4L2 USB 웹캠 입력 |
 | 클릭 캘리브레이션 | 로컬 OpenCV 창 | 로컬 데스크톱 OpenCV 창 필요 |
 | CSI 리본 케이블 카메라 | 대상 아님 | 현재 미지원; Picamera2 캡처 경로 별도 구현 필요 |
-| 실물 확인 | 사용자 카메라·YOLO 실행 성공 보고 | Pi·웹캠 실물 미검증 |
+| 실물 확인 | 사용자 카메라·YOLO 실행 성공 보고 | Pi 5 C270 프레임 수신·Tk 시작 창 확인; 실제 좌석 추론 미검증 |
 
 USB 웹캠과 CSI 카메라의 소프트웨어 경로를 혼동하지 마세요.
 CSI 모듈은 libcamera 기반 Picamera2 경로를 확인해야 하며 현재 `--camera` 번호만 바꿔서 지원된다고 보장하지 않습니다.
 [Raspberry Pi Picamera2 안내](https://www.raspberrypi.com/documentation/accessories/camera-software.html#use-libcamera-from-python-with-picamera2)
 
 Windows/Linux 백엔드 선택과 화면 없는 Linux 오류 처리는 모의 테스트를 통과했습니다.
-Linux 분기를 시뮬레이션한 테스트이며 실제 Linux OS·ARM64·카메라 드라이버를 실행한 결과는 아닙니다.
-Windows 노트북 YOLO는 사용자 실행 성공 보고가 있습니다. Pi의 모델 호환성·성능과 실제 강의실 정확도는 미검증이며 VLM은 미구현입니다.
+112개 테스트는 Pi ARM64에서도 실행했지만 카메라·탐지 입력은 모의 객체입니다. C270의 V4L2 프레임 수신과 Tk 시작 창은 별도 실제 장비 검사로 확인했습니다.
+Windows 노트북 YOLO는 사용자 실행 성공 보고가 있습니다. Pi의 실제 좌석 추론·성능과 실제 강의실 정확도는 미검증이며 VLM은 미구현입니다.
 
 ### 목적별 실행 명령 (Windows)
 
@@ -175,9 +220,9 @@ Linux에서는 위 표의 `.\.venv\Scripts\python.exe`를 `.venv/bin/python`으�
 `14s`에는 테스트용 빈자리 검증 신호를 넣고, `44s`에는 마지막 유효 판정 후 30초 만료를 확인합니다.
 
 현재 자동 테스트는 기존 상태·ROI·캘리브레이션 55개, 최신 프레임·YOLO·매핑·실행기 22개,
-GUI 실행 흐름 10개, 상반신 ROI 겹침 매핑 9개로 총 96개입니다.
+GUI 실행 흐름·로컬 화면 선택 19개, 상반신 ROI 겹침 매핑 9개, 개발용 원격 화면 7개로 총 112개입니다.
 카메라와 화면 이벤트는 가짜 입력으로 검증하므로 테스트 통과가 실제 영상의 인식 정확도를 뜻하지 않습니다.
-테스트 출력 마지막의 `Ran 96 tests`와 `OK`를 확인하세요.
+테스트 출력 마지막의 `Ran 112 tests`와 `OK`를 확인하세요.
 가상환경이 없어도 `python -m zeroframe`, `python -m unittest discover -s tests -v`는 실행할 수 있습니다.
 
 ## 2단계: 노트북 카메라로 좌석 지정
@@ -277,7 +322,8 @@ Invoke-WebRequest -Uri "https://github.com/ultralytics/assets/releases/download/
 
 ```bash
 sudo apt install -y python3-numpy python3-matplotlib python3-pil python3-yaml python3-requests python3-scipy python3-psutil
-.venv/bin/python -m pip install torch torchvision polars ultralytics-thop
+.venv/bin/python -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+.venv/bin/python -m pip install polars ultralytics-thop
 .venv/bin/python -m pip install --no-deps ultralytics==8.3.253
 mkdir -p local
 curl --fail --location https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt --output local/yolo11n.pt
@@ -286,11 +332,11 @@ curl --fail --location https://github.com/ultralytics/assets/releases/download/v
 ```
 
 위 의존성은 고정 버전의 [Ultralytics 패키지 정의](https://github.com/ultralytics/ultralytics/blob/v8.3.253/pyproject.toml)에 맞춥니다.
-Pi의 ARM64 wheel·apt/pip 조합은 실물 미검증입니다. import가 실패하면 실행 전에 의존성을 확인하세요.
+현재 Pi의 apt OpenCV는 4.10.0이며 PyTorch는 CPU 전용 배포처에서 준비합니다. import가 실패하면 실행 전에 의존성을 확인하세요.
 `pip check`는 apt의 `python3-opencv`를 `opencv-python`으로 인식하지 못할 수 있습니다.
 
 실행기 기본값은 화면 없이 상태만 출력하므로 SSH에서도 사용할 수 있습니다.
-Pi에 연결한 **로컬 모니터**에서 확인할 때만 `--preview`를 추가하세요. VNC 등으로 영상을 외부 전송하지 않습니다.
+Pi의 로컬 데스크톱에서 확인할 때 `--preview`를 추가하세요. 개발 중 노트북 조작은 위의 SSH 터널 예외를 따릅니다.
 USB 웹캠은 `--camera` 번호로 선택하며, CSI 카메라는 계속 미지원입니다.
 
 Pi CPU에서는 `.pt`가 느릴 수 있습니다. 준비 단계에서 공식 [NCNN 변환](https://docs.ultralytics.com/integrations/ncnn/),
@@ -389,6 +435,7 @@ print(candidates)  # ('A-01',)
 ## 구조
 
 - `main.py`: 방·좌석·카메라 입력, 캘리브레이션·탐지 실행과 복귀를 묶은 로컬 시작 창.
+- `zeroframe/dev_remote.py`: 개발 전용 SSH 화면 공유 서버의 시작·종료와 loopback 제한.
 - `zeroframe/state.py`: 상태, 관측, 시간 설정, 좌석별 상태 머신.
 - `zeroframe/__main__.py`: 가짜 관측을 사용하는 실행 예제.
 - `zeroframe/camera.py`: 로컬 카메라 열기·읽기·해제.
@@ -450,7 +497,8 @@ state = machine.tick(monotonic())
 ## 이미지 처리와 현재 검증 한계
 
 캘리브레이션과 YOLO 실행기는 카메라 이미지를 RAM에서만 읽고 선택적으로 로컬 화면에 표시하며,
-이미지 파일·영상 파일·네트워크 전송 기능은 사용하지 않습니다.
+이미지·영상 파일을 저장하지 않습니다. 승인된 개발 모드에서는 별도 원격 데스크톱이 이 화면을 SSH 터널로 공유합니다.
+운영·시연 배포에서는 개발 모드를 끄고 비영상 메타데이터만 전송합니다.
 OS의 스왑·페이지 파일·크래시 덤프 등은 코드 테스트로 검증하지 않았습니다.
 운영 전 장비 환경에서 별도로 점검해야 합니다.
 .gitignore는 가상환경·캐시, 로컬 인증 정보, 현장 좌표, 이미지·영상·배열 덤프, 모델 가중치·로그를 제외합니다.
@@ -465,8 +513,8 @@ OS의 스왑·페이지 파일·크래시 덤프 등은 코드 테스트로 검�
 | :--- | :--- |
 | GUI 실제 조작 | 기존 좌표로 시작, 좌석 재설정·취소, 결과 창 종료 후 시작 창 복귀 |
 | 상반신·짐 현장 보정 | person 상자 생성·confidence, 한 좌석과의 겹침, 인접 좌석·통로 보행자·가림·짐만 남은 사례 |
-| 성능·Linux 검증 | 노트북 실제 FPS·반영 지연·UNKNOWN 비율, Pi ARM64 설치와 NCNN/ONNX·CPU/RAM 비교 |
+| 성능·Linux 검증 | 노트북 실제 FPS·반영 지연·UNKNOWN 비율, Pi 실영상 추론과 NCNN/ONNX·CPU/RAM 비교 |
 | 4단계 전송 | 계약에 맞는 상태 JSON·인증·변경 전송·10초 하트비트, 통신 단절·복구 중 분석 지속 |
 | 5단계 통합 | 실측에 따른 선택적 VLM 도입 결정, 최종 서버 연동·정확도·프라이버시 검증 |
 
-각 검증의 근거와 테스트 파일별 96개 내역은 [구현 진행 기록](docs/implementation-plan.md)에 정리했습니다.
+각 검증의 근거와 테스트 파일별 112개 내역은 [구현 진행 기록](docs/implementation-plan.md)에 정리했습니다.

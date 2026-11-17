@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ZeroFrame: main.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "linux": {
+        "env": {
+          "ZEROFRAME_DEV_REMOTE": "1"
+        }
+      },
+      "windows": {
+        "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+      },
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Python: 열린 파일",
+      "type": "debugpy",
+      "request": "launch",
+      "purpose": ["debug-in-terminal"],
+      "program": "${file}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "linux": {
+        "env": {
+          "ZEROFRAME_DEV_REMOTE": "1"
+        }
+      },
+      "windows": {
+        "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+      },
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

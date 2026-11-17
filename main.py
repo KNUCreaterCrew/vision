@@ -1,5 +1,7 @@
 """Single desktop entry point for calibration and local seat detection."""
 
+import argparse
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import re
@@ -7,10 +9,29 @@ import sys
 
 from calibrate import calibrate
 from run_vision import run
+from zeroframe.dev_remote import DevelopmentDesktop
 from zeroframe.roi import load_config, validate_ids
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def prepare_local_display():
+    """Use the user's single local X display when launched through Remote-SSH."""
+    if not sys.platform.startswith("linux") or os.environ.get("DISPLAY"):
+        return
+    try:
+        displays = [path for path in Path("/tmp/.X11-unix").glob("X[0-9]*")
+                    if path.name[1:].isdigit() and path.is_socket()
+                    and path.stat().st_uid == os.getuid()]
+    except OSError:
+        return
+    if len(displays) != 1:
+        return
+    os.environ["DISPLAY"] = f":{displays[0].name[1:]}"
+    authority = Path.home() / ".Xauthority"
+    if authority.is_file():
+        os.environ.setdefault("XAUTHORITY", str(authority))
 
 
 def read_settings(room, seats, camera, model):
@@ -159,20 +180,36 @@ class Launcher:
             self.dialogs.showerror("ZeroFrame 실행 오류", error_message, parent=self.root)
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--dev-remote", action="store_true",
+                       help="개발 전용: SSH 터널을 통해 노트북 브라우저로 Pi 화면 조작")
+    modes.add_argument("--local", action="store_false", dest="dev_remote",
+                       help="SSH 접속에서도 Pi 로컬 창만 사용하고 화면 공유 끄기")
+    parser.set_defaults(dev_remote=(sys.platform.startswith("linux") and (
+        bool(os.environ.get("SSH_CONNECTION")) or os.environ.get("ZEROFRAME_DEV_REMOTE") == "1"
+    )))
+    args = parser.parse_args(argv)
     try:
         import tkinter as tk
     except ImportError:
         print("Tkinter가 필요합니다. Windows: Python의 Tcl/Tk 구성 요소 설치, Pi OS: sudo apt install python3-tk", file=sys.stderr)
         return 1
     os.chdir(ROOT)
+    prepare_local_display()
     try:
-        root = tk.Tk()
-    except tk.TclError as error:
-        print(f"로컬 데스크톱 화면을 열 수 없습니다: {error}", file=sys.stderr)
+        with DevelopmentDesktop() if args.dev_remote else nullcontext():
+            root = tk.Tk()
+            Launcher(root)
+            root.mainloop()
+    except KeyboardInterrupt:
+        return 0
+    except (tk.TclError, OSError, RuntimeError) as error:
+        print(f"시작 창을 열 수 없습니다: {error}\n"
+              "Pi 데스크톱에 로그인하세요. 개발용 원격 조작은 main.py --dev-remote로 실행합니다.\n"
+              "화면 없는 운영은 run_vision.py를 --preview 없이 실행하세요.", file=sys.stderr)
         return 1
-    Launcher(root)
-    root.mainloop()
     return 0
 
 

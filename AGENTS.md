@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; YOLO/mapping: `zeroframe/detection.py`; editor: `calibrate.py`; runtime: `run_vision.py`; desktop launcher: `main.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Pi and field-quality verification remain pending.
+Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; YOLO/mapping: `zeroframe/detection.py`; editor: `calibrate.py`; runtime: `run_vision.py`; desktop launcher: `main.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Pi live inference and field-quality verification remain pending.
 
 - `zeroframe-vision`: Python, YOLO11n, ROI, state transitions, optional local SmolVLM2-256M.
 - `zeroframe-backend`: authenticated ingestion, freshness, WebSocket; framework undecided.
@@ -13,7 +13,7 @@ Update contracts in `zeroframe-docs` before changing APIs, events, or fields acr
 
 ## Current Implementation Status
 
-Stages 1–2 are implemented; stage 3 includes YOLO, the desktop launcher, and upper-body ROI mapping, with field validation pending. Windows YOLO success is user-reported; the latest 96 automated tests use simulated model/camera inputs. Stage 4 transport and stage 5 VLM/integration remain unimplemented. Keep README, this guide, the specification, and `docs/implementation-plan.md` consistent; distinguish working code, user reports, simulations, and hardware evidence.
+Stages 1–2 are implemented; stage 3 includes YOLO, the desktop launcher, and upper-body ROI mapping, with field validation pending. Windows YOLO success is user-reported; the latest 112 automated tests pass on Pi ARM64 / Python 3.13.5 with simulated model/camera inputs. Pi 5 C270 V4L2 capture of 60 frames, the real Tk launcher, and local model inference on a synthetic black frame are verified separately; live seat inference remains pending. Development desktop HTTP/WebSocket/RFB connection and remote mouse/keyboard delivery to a test Tk window are verified locally. Stage 4 transport and stage 5 VLM/integration remain unimplemented. Keep README, this guide, the specification, and `docs/implementation-plan.md` consistent; distinguish working code, user reports, simulations, and hardware evidence.
 
 ## Architecture & State Rules
 
@@ -29,6 +29,8 @@ Python 3.10+. Run from the repository root:
 
 - `python -m zeroframe`: synthetic demo; no camera/model/network.
 - `python main.py`: Tkinter launcher for calibration and local preview; Pi needs apt `python3-tk` and a desktop. Reuses existing functions on the main thread, hides while OpenCV runs, then returns. Keep optional headless CLI available.
+- VS Code Ctrl+F5: `.vscode/launch.json` runs `main.py` with the project `.venv` Python for Linux/Windows. Linux SSH launches also auto-enable the authorized development desktop, including the plain Run Python File button without launch configuration. Forward loopback port 6080 through SSH and use the laptop browser. Use `main.py --local` to disable sharing explicitly; non-SSH CLI launch stays local unless development mode is requested.
+- `.venv/bin/python main.py --dev-remote`: explicit development desktop; needs an active Pi Wayland session and apt `wayvnc novnc websockify util-linux`. Servers stop with the app; no boot service is enabled.
 - `python -m unittest discover -s tests -v`: unit tests.
 - Windows: `python -m pip install -r requirements.txt` in a standard CPython venv.
 - Pi OS: install `python3-opencv` via apt, create `.venv` with `--system-site-packages`, and run `.venv/bin/python`. Avoid mixing pip/apt OpenCV.
@@ -57,3 +59,5 @@ Merge `feat/<feature>` into `dev` with one reviewer; `main` is the release/demo 
 ## Security & Configuration
 
 Keep images in device RAM only; release buffers on completion, cancellation, or timeout. Prevent image writes to disk, swap, logs, dumps, or external APIs. Transmit metadata JSON only. Keep keys private. Verify storage/network behavior; counters alone cannot establish compliance.
+
+User-authorized exception (2026-11-17): during development and calibration, the trusted developer laptop may receive the Pi desktop/camera preview through an encrypted SSH tunnel for interactive control. The development server binds only to `127.0.0.1:6080`, with WayVNC on a private Unix socket. Image saving/recording and external image APIs remain prohibited. Production/demo deployment retains metadata-only transmission; do not enable the development mode there. Backend/frontend API contracts are unchanged.

@@ -8,6 +8,63 @@ import main
 from zeroframe.roi import load_config, save_config
 
 
+class LocalDisplayTests(unittest.TestCase):
+    def display(self, name, uid=42):
+        display = Mock()
+        display.name = name
+        display.is_socket.return_value = True
+        display.stat.return_value = SimpleNamespace(st_uid=uid)
+        return display
+
+    def test_existing_display_and_authority_are_preserved(self):
+        environment = {"DISPLAY": ":3", "XAUTHORITY": "/existing/authority"}
+        with patch.dict(main.os.environ, environment, clear=True), \
+             patch.object(main.sys, "platform", "linux"), patch.object(main, "Path") as paths:
+            main.prepare_local_display()
+            self.assertEqual(dict(main.os.environ), environment)
+            paths.assert_not_called()
+
+    def test_remote_launch_uses_own_single_local_display(self):
+        with TemporaryDirectory() as directory:
+            authority = Path(directory) / ".Xauthority"
+            authority.touch()
+            with patch.dict(main.os.environ, {}, clear=True), \
+                 patch.object(main.sys, "platform", "linux"), \
+                 patch.object(main.os, "getuid", return_value=42, create=True), \
+                 patch.object(main, "Path") as paths:
+                paths.return_value.glob.return_value = [self.display("X2")]
+                paths.home.return_value = Path(directory)
+                main.prepare_local_display()
+                self.assertEqual(main.os.environ["DISPLAY"], ":2")
+                self.assertEqual(main.os.environ["XAUTHORITY"], str(authority))
+
+    def test_foreign_or_multiple_displays_are_not_selected(self):
+        for displays in ([], [self.display("X0", uid=99)],
+                         [self.display("X0"), self.display("X1")]):
+            with self.subTest(displays=len(displays)), \
+                 patch.dict(main.os.environ, {}, clear=True), \
+                 patch.object(main.sys, "platform", "linux"), \
+                 patch.object(main.os, "getuid", return_value=42, create=True), \
+                 patch.object(main, "Path") as paths:
+                paths.return_value.glob.return_value = displays
+                main.prepare_local_display()
+                self.assertNotIn("DISPLAY", main.os.environ)
+
+    def test_unavailable_display_directory_is_tolerated(self):
+        with patch.dict(main.os.environ, {}, clear=True), \
+             patch.object(main.sys, "platform", "linux"), patch.object(main, "Path") as paths:
+            paths.return_value.glob.side_effect = PermissionError("unavailable")
+            main.prepare_local_display()
+            self.assertNotIn("DISPLAY", main.os.environ)
+
+    def test_windows_does_not_probe_linux_displays(self):
+        with patch.dict(main.os.environ, {}, clear=True), \
+             patch.object(main.sys, "platform", "win32"), patch.object(main, "Path") as paths:
+            main.prepare_local_display()
+            paths.assert_not_called()
+            self.assertNotIn("DISPLAY", main.os.environ)
+
+
 class LauncherTests(unittest.TestCase):
     def launcher(self, directory):
         app = object.__new__(main.Launcher)
@@ -131,6 +188,47 @@ class LauncherTests(unittest.TestCase):
             run.assert_not_called()
             app.root.withdraw.assert_not_called()
             app.dialogs.showerror.assert_called_once()
+
+
+class EntryPointTests(unittest.TestCase):
+    def test_plain_ssh_run_button_starts_remote_desktop_without_launch_settings(self):
+        tkinter = SimpleNamespace(Tk=Mock(), TclError=RuntimeError)
+        with patch.dict(main.os.environ, {"SSH_CONNECTION": "synthetic"}, clear=True), \
+             patch.dict("sys.modules", {"tkinter": tkinter}), patch.object(main.sys, "platform", "linux"), \
+             patch.object(main, "prepare_local_display"), patch.object(main, "Launcher"), \
+             patch.object(main, "DevelopmentDesktop") as desktop, patch.object(main.os, "chdir"):
+            self.assertEqual(main.main([]), 0)
+            desktop.return_value.__enter__.assert_called_once()
+            desktop.return_value.__exit__.assert_called_once()
+
+    def test_local_option_disables_screen_sharing_even_in_ssh_and_vscode(self):
+        tkinter = SimpleNamespace(Tk=Mock(), TclError=RuntimeError)
+        environment = {"SSH_CONNECTION": "synthetic", "ZEROFRAME_DEV_REMOTE": "1"}
+        with patch.dict(main.os.environ, environment, clear=True), \
+             patch.dict("sys.modules", {"tkinter": tkinter}), patch.object(main.sys, "platform", "linux"), \
+             patch.object(main, "prepare_local_display"), patch.object(main, "Launcher"), \
+             patch.object(main, "DevelopmentDesktop") as desktop, patch.object(main.os, "chdir"):
+            self.assertEqual(main.main(["--local"]), 0)
+            desktop.assert_not_called()
+
+    def test_vscode_development_mode_owns_desktop_lifetime_without_ssh_environment(self):
+        tkinter = SimpleNamespace(Tk=Mock(), TclError=RuntimeError)
+        with patch.dict(main.os.environ, {"ZEROFRAME_DEV_REMOTE": "1"}, clear=True), \
+             patch.dict("sys.modules", {"tkinter": tkinter}), patch.object(main.sys, "platform", "linux"), \
+             patch.object(main, "prepare_local_display"), patch.object(main, "Launcher"), \
+             patch.object(main, "DevelopmentDesktop") as desktop, patch.object(main.os, "chdir"):
+            self.assertEqual(main.main([]), 0)
+            desktop.return_value.__enter__.assert_called_once()
+            desktop.return_value.__exit__.assert_called_once()
+            tkinter.Tk.return_value.mainloop.assert_called_once()
+
+    def test_normal_launch_does_not_start_remote_desktop(self):
+        tkinter = SimpleNamespace(Tk=Mock(), TclError=RuntimeError)
+        with patch.dict(main.os.environ, {}, clear=True), patch.dict("sys.modules", {"tkinter": tkinter}), \
+             patch.object(main, "prepare_local_display"), patch.object(main, "Launcher"), \
+             patch.object(main, "DevelopmentDesktop") as desktop, patch.object(main.os, "chdir"):
+            self.assertEqual(main.main([]), 0)
+            desktop.assert_not_called()
 
 
 if __name__ == "__main__":
