@@ -1,6 +1,7 @@
 """Run local YOLO -> ROI -> seat states. No images are saved or sent."""
 
 import argparse
+from contextlib import nullcontext
 from math import isfinite
 import os
 import sys
@@ -9,6 +10,7 @@ from time import monotonic, sleep
 from zeroframe.camera import LatestCamera, require_opencv
 from zeroframe.detection import CLASSES, SeatTracker, YoloDetector
 from zeroframe.roi import load_config
+from zeroframe.transport import load_transport_config, StatusPublisher
 
 
 WINDOW = "ZeroFrame - local YOLO (Q/ESC to quit)"
@@ -35,7 +37,7 @@ def draw_preview(cv2, frame, config, detections, states, *, fps, latency_ms, sta
     cv2.imshow(WINDOW, frame)
 
 
-def run(config_path, model_path, *, camera=0, fps=2.0, preview=False):
+def run(config_path, model_path, *, camera=0, fps=2.0, preview=False, transport_config=None):
     if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not isfinite(fps) or not 1 <= fps <= 3:
         raise ValueError("fps must be between 1 and 3")
     if isinstance(camera, bool) or not isinstance(camera, int) or camera < 0:
@@ -45,23 +47,28 @@ def run(config_path, model_path, *, camera=0, fps=2.0, preview=False):
         os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
     ):
         raise RuntimeError("Preview needs a local Linux desktop; omit --preview for headless use.")
+    transport = load_transport_config(transport_config)
     detector = YoloDetector(model_path)
     cv2 = require_opencv()
     started_at = monotonic()
     tracker = SeatTracker(config, now=started_at)
+    initial_states = {seat_id: machine.state for seat_id, machine in tracker.machines.items()}
+    publisher = StatusPublisher(transport, config.room_id, initial_states, started_at=started_at) if transport else None
     previous_at = float("-inf")
     next_analysis = started_at
     next_report = started_at
     count = 0
     frame = sample = None
     window_open = False
-    print("Local YOLO: camera frames stay in RAM; no EMPTY verification or server transmission.")
+    print("Local YOLO: camera frames stay in RAM; no EMPTY verification.")
+    print("Backend transmission: metadata only, change reports + 10s heartbeat." if publisher else
+          "Backend transmission disabled: no transport_config.json or backend environment settings.")
     print("Q/ESC closes preview; Ctrl+C stops headless mode.")
     try:
         if preview:
             cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
             window_open = True
-        with LatestCamera(camera) as stream:
+        with publisher if publisher is not None else nullcontext(), LatestCamera(camera) as stream:
             while True:
                 now = monotonic()
                 if preview and (cv2.waitKey(1) & 0xFF in (27, ord("q"))
@@ -73,6 +80,8 @@ def run(config_path, model_path, *, camera=0, fps=2.0, preview=False):
                 sample = stream.read_after(previous_at)
                 if sample is None:
                     states = tracker.tick(monotonic())
+                    if publisher is not None:
+                        publisher.update(states, inference_count=count)
                     if monotonic() >= next_report:
                         print("Waiting for camera | " + " ".join(f"{s}={v.status.value}" for s, v in states.items()), flush=True)
                         next_report = monotonic() + 1
@@ -91,6 +100,8 @@ def run(config_path, model_path, *, camera=0, fps=2.0, preview=False):
                 states = tracker.update(detections, observed_at=observed_at, now=finished_at,
                                         frame_width=width, frame_height=height)
                 count += 1
+                if publisher is not None:
+                    publisher.update(states, inference_count=count)
                 measured_fps = count / max(finished_at - started_at, 0.001)
                 if finished_at >= next_report:
                     print(f"analysis={measured_fps:.2f} FPS predict={latency_ms:.0f}ms "
@@ -117,9 +128,11 @@ def main(argv=None):
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--fps", type=float, default=2, help="target analysis FPS (1-3), not guaranteed throughput")
     parser.add_argument("--preview", action="store_true", help="show frames on the local desktop only")
+    parser.add_argument("--transport-config", help="backend settings JSON; defaults to repository transport_config.json")
     args = parser.parse_args(argv)
     try:
-        run(args.config, args.model, camera=args.camera, fps=args.fps, preview=args.preview)
+        run(args.config, args.model, camera=args.camera, fps=args.fps, preview=args.preview,
+            transport_config=args.transport_config)
     except KeyboardInterrupt:
         print("Stopped; camera released. No images saved.")
         return 0

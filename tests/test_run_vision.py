@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from io import StringIO
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import run_vision
 from zeroframe.detection import Detection
@@ -10,7 +10,8 @@ from zeroframe.roi import load_config
 
 
 class VisionRunnerTests(unittest.TestCase):
-    def run_fake(self, *, preview=False, frame=None, detect_error=None, camera_error=None):
+    def run_fake(self, *, preview=False, frame=None, detect_error=None, camera_error=None,
+                 transport=None, publisher=None):
         cv = SimpleNamespace(
             error=type("FakeCVError", (Exception,), {}), WINDOW_AUTOSIZE=1,
             WND_PROP_VISIBLE=1, namedWindow=Mock(), waitKey=Mock(side_effect=[0, ord("q")]),
@@ -36,6 +37,8 @@ class VisionRunnerTests(unittest.TestCase):
              patch.object(run_vision, "YoloDetector", return_value=detector), \
              patch.object(run_vision, "require_opencv", return_value=cv), \
              patch.object(run_vision, "LatestCamera", side_effect=session), \
+             patch.object(run_vision, "load_transport_config", return_value=transport), \
+             patch.object(run_vision, "StatusPublisher", return_value=publisher), \
              patch.object(run_vision, "monotonic", side_effect=[0, 1, 1.1, 1.2, 2]), \
              patch.object(run_vision, "draw_preview") as draw, \
              patch.dict("os.environ", {"DISPLAY": ":test"}, clear=True), \
@@ -58,6 +61,31 @@ class VisionRunnerTests(unittest.TestCase):
         draw.assert_not_called()
         self.assertIn("A-01=UNKNOWN", output)
         self.assertIn("predict=100ms", output)
+
+    def test_configured_transport_receives_only_states_and_is_closed(self):
+        publisher = MagicMock()
+        self.run_fake(transport=Mock(), publisher=publisher)
+        publisher.__enter__.assert_called_once()
+        publisher.__exit__.assert_called_once()
+        sent_states = publisher.update.call_args.args[0]
+        self.assertEqual(set(sent_states), {"A-01", "A-02"})
+        self.assertTrue(all(hasattr(state, "last_observed_at") for state in sent_states.values()))
+        self.assertEqual(publisher.update.call_args.kwargs, {"inference_count": 1})
+
+    def test_inference_failure_closes_transport_before_releasing_model(self):
+        publisher = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, "model failed"):
+            self.run_fake(detect_error=RuntimeError("model failed"), transport=Mock(), publisher=publisher)
+        publisher.__exit__.assert_called_once()
+
+    def test_bad_transport_settings_fail_before_model_and_camera_start(self):
+        with patch.object(run_vision, "load_config"), \
+             patch.object(run_vision, "load_transport_config", side_effect=ValueError("bad backend settings")), \
+             patch.object(run_vision, "YoloDetector") as model, patch.object(run_vision, "LatestCamera") as camera:
+            with self.assertRaisesRegex(ValueError, "backend settings"):
+                run_vision.run("unused", "unused")
+            model.assert_not_called()
+            camera.assert_not_called()
 
     def test_preview_renders_and_q_stops_even_without_sampling_delay(self):
         detector, cv, draw, output = self.run_fake(preview=True)

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; YOLO/mapping: `zeroframe/detection.py`; editor: `calibrate.py`; runtime: `run_vision.py`; desktop launcher: `main.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Pi live inference and field-quality verification remain pending.
+Specification: `zeroframe_v1.1_local_multimodal.md`. State: `zeroframe/state.py`; camera/coordinates: `zeroframe/camera.py`, `zeroframe/roi.py`; YOLO/mapping: `zeroframe/detection.py`; transport: `zeroframe/transport.py`; editor: `calibrate.py`; runtime: `run_vision.py`; desktop launcher: `main.py`; tests: `tests/test_*.py`. See `README.md` and `docs/implementation-plan.md`. Pi live inference and field-quality verification remain pending.
 
 - `zeroframe-vision`: Python, YOLO11n, ROI, state transitions, optional local SmolVLM2-256M.
 - `zeroframe-backend`: authenticated ingestion, freshness, WebSocket; framework undecided.
@@ -13,7 +13,7 @@ Update contracts in `zeroframe-docs` before changing APIs, events, or fields acr
 
 ## Current Implementation Status
 
-Stages 1–2 are implemented; stage 3 includes YOLO, the desktop launcher, and upper-body ROI mapping, with field validation pending. Windows YOLO success is user-reported; the latest 112 automated tests pass on Pi ARM64 / Python 3.13.5 with simulated model/camera inputs. Pi 5 C270 V4L2 capture of 60 frames, the real Tk launcher, and local model inference on a synthetic black frame are verified separately; live seat inference remains pending. Development desktop HTTP/WebSocket/RFB connection and remote mouse/keyboard delivery to a test Tk window are verified locally. Stage 4 transport and stage 5 VLM/integration remain unimplemented. Keep README, this guide, the specification, and `docs/implementation-plan.md` consistent; distinguish working code, user reports, simulations, and hardware evidence.
+Stages 1–2 are implemented; stage 3 includes YOLO, the desktop launcher, and upper-body ROI mapping, with field validation pending. Windows YOLO success is user-reported; the latest 136 automated tests pass on Pi ARM64 / Python 3.13.5 with simulated model/camera inputs and some real loopback HTTP checks. Pi 5 C270 V4L2 capture of 60 frames, the real Tk launcher, and local model inference on a synthetic black frame are verified separately; live seat inference remains pending. Development desktop HTTP/WebSocket/RFB connection and remote mouse/keyboard delivery to a test Tk window are verified locally. Stage 4 transport is implemented and locally verified, including a four-report synthetic HTTP demo; an actual backend is not available yet. Stage 5 VLM/integration remains unimplemented. Keep README, this guide, the specification, and `docs/implementation-plan.md` consistent; distinguish working code, user reports, simulations, and hardware evidence.
 
 ## Architecture & State Rules
 
@@ -21,7 +21,7 @@ Support Windows development and prioritize Raspberry Pi OS Linux deployment (Pi 
 
 Person mapping uses polygon intersection covering at least 50% of the visible bbox in exactly one seat; positive-area overlap with multiple seats is ambiguous. Calibrate the seated head/shoulders/back region as well as the desk. Belongings retain bottom-center mapping. Never require visible feet or infer model recall from mapping tests.
 
-Use time-based debouncing. Start `UNKNOWN`; missing detections never establish `EMPTY`. Require sustained absence and current verification, including initial empty seats. Never generate `empty_verified` from missing detections. Expire unverified states after 30 seconds. Internal timestamps use monotonic seconds, not API timestamps. Future transport uses 10-second heartbeats and backend offline handling at 30 seconds. FPS/latency remain targets.
+Use time-based debouncing. Start `UNKNOWN`; missing detections never establish `EMPTY`. Require sustained absence and current verification, including initial empty seats. Never generate `empty_verified` from missing detections. Expire unverified states after 30 seconds. Internal timestamps use monotonic seconds, not API timestamps. Transport uses 10-second heartbeats; backend offline handling at 30 seconds remains a backend requirement. FPS/latency remain targets.
 
 ## Build, Test, and Development Commands
 
@@ -37,6 +37,9 @@ Python 3.10+. Run from the repository root:
 - `python calibrate.py --room IT4-101 --seats A-01 A-02`: ROI editor; JSON only. Existing files require `--overwrite`.
 - Windows YOLO: install `requirements-yolo.txt`; Pi: use README's apt/pip split to preserve apt OpenCV. Pin Ultralytics 8.3.253 until predictor buffer cleanup is rechecked.
 - `python run_vision.py --config roi_config.json --model local/yolo11n.pt --preview`: local inference; omit preview for headless Linux. Prepare trusted model files before camera startup; runtime downloads/auto-installs are disabled. Stage 3 never verifies `EMPTY`.
+- `python mock_backend.py`, then `python send_status_demo.py` in another terminal: camera/model-free synthetic HTTP reports to loopback port 8765. This receiver is not the actual backend.
+- Copy `examples/transport_config.example.json` to ignored `transport_config.json` to enable reports from existing GUI/CLI inference. Environment overrides: `ZEROFRAME_BACKEND_URL`, `EDGE_NODE_SECRET_KEY`. Missing settings disable transport; never commit real keys.
+- Transport keeps one in-flight report and one latest metadata snapshot, retries with bounded backoff, converts monotonic to UTC only at serialization, expires stale snapshots independently of inference, and reports nullable confidence. HTTPS is required except loopback development. External API fields/routes are unchanged.
 
 Update progress after each stage.
 
