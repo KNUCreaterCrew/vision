@@ -1,0 +1,57 @@
+# Python environment and caches
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local credentials (only a placeholder environment template may be shared)
+.env
+.env.*
+!/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+client_secret*.json
+.aws/
+.ssh/
+
+# Real calibration data; keep the reviewed synthetic example
+roi_config*.json
+!/examples/roi_config.example.json
+/local/
+
+# Camera images, recordings, array dumps, and crash dumps
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+*.heic
+*.heif
+*.tif
+*.tiff
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.npy
+*.npz
+*.dmp
+
+# Downloaded/exported model weights
+*.pt
+*.pth
+*.onnx
+*.gguf
+*.safetensors
+*.bin
+
+# Local logs, temporary files, and Windows metadata
+*.log
+*.tmp
+*.bak
+Thumbs.db
+desktop.ini

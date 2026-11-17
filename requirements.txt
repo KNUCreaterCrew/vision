@@ -1,0 +1,2 @@
+# Windows: use the pip wheel. Raspberry Pi OS: use apt python3-opencv (README).
+opencv-python==4.13.0.92; sys_platform == "win32"
