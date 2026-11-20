@@ -1,0 +1,12 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
+  "python.terminal.executeInFileDir": false,
+  "remote.autoForwardPorts": true,
+  "remote.portsAttributes": {
+    "6080": {
+      "label": "ZeroFrame 개발 화면",
+      "onAutoForward": "openBrowser",
+      "protocol": "http"
+    }
+  }
+}

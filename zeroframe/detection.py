@@ -1,14 +1,18 @@
 """Local YOLO inference and conservative, image-free seat observations."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 import os
 from pathlib import Path
 
-from .state import Observation, SeatStateMachine, _validate_seconds
+from .state import Observation, SeatStateMachine, Status, TransitionPolicy, _validate_seconds
 
 
-CLASSES = {0: "person", 24: "backpack", 26: "handbag", 63: "laptop", 73: "book"}
+CLASSES = {
+    0: "person", 24: "backpack", 26: "handbag", 39: "bottle",
+    63: "laptop", 67: "cell phone", 73: "book",
+}
+MAX_RESULT_AGE_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -38,9 +42,9 @@ class Detection:
         object.__setattr__(self, "bbox", tuple(self.bbox))
 
     @property
-    def accepted(self): #사람 0.5 물건 0.45 신뢰도
+    def accepted(self):
         return self.class_id in CLASSES and self.confidence >= (
-            0.50 if self.class_id == 0 else 0.45
+            0.50 if self.class_id == 0 else 0.35
         )
 
 
@@ -53,7 +57,8 @@ def seat_observations(config, detections, *, observed_at, frame_width, frame_hei
         strong_overlap = True
         if detection.class_id == 0:
             overlaps = config.overlapping_seat_ratios(
-                detection.bbox, frame_width=frame_width, frame_height=frame_height
+                detection.bbox, frame_width=frame_width, frame_height=frame_height,
+                normalize_to_smaller=True,
             )
             candidates = tuple(overlaps)
             strong_overlap = len(candidates) == 1 and overlaps[candidates[0]] >= 0.5
@@ -74,17 +79,17 @@ def seat_observations(config, detections, *, observed_at, frame_width, frame_hei
 class SeatTracker:
     """Reject old inference using capture time, then advance freshness to completion time."""
 
-    def __init__(self, config, *, now):
+    def __init__(self, config, *, now, policy: TransitionPolicy | None = None):
         self.config = config
         self._now = now
-        self.machines = {seat.seat_id: SeatStateMachine(now=now) for seat in config.seats}
+        self.machines = {seat.seat_id: SeatStateMachine(policy, now=now) for seat in config.seats}
 
     def tick(self, now):
         states = {seat_id: machine.tick(now) for seat_id, machine in self.machines.items()}
         self._now = now
         return states
 
-    def update(self, detections, *, observed_at, now, frame_width, frame_height):
+    def update(self, detections, *, observed_at, now, frame_width, frame_height, empty_matches=None):
         _validate_seconds("now", now)
         _validate_seconds("observed_at", observed_at)
         if now < self._now:
@@ -95,9 +100,18 @@ class SeatTracker:
             self.config, detections, observed_at=observed_at,
             frame_width=frame_width, frame_height=frame_height,
         )
-        for seat_id, machine in self.machines.items():
-            if now - observed_at <= machine.policy.max_observation_gap:
-                machine.observe(observations[seat_id])
+        if now - observed_at <= MAX_RESULT_AGE_SECONDS:
+            for seat_id, machine in self.machines.items():
+                obs = observations[seat_id]
+                if empty_matches is not None and not (obs.person or obs.belongings):
+                    match = empty_matches[seat_id]
+                    if obs.view_clear:
+                        obs = replace(obs, view_clear=match is not False, empty_verified=match is True)
+                    elif match is not False and machine.state.status == Status.EMPTY:
+                        # Ambiguous YOLO overlap without a clear visual change may hold
+                        # its last EMPTY until expiry, but cannot verify or refresh it.
+                        obs = replace(obs, view_clear=True)
+                machine.observe(obs)
         return self.tick(now)
 
 

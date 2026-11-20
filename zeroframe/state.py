@@ -38,10 +38,13 @@ class TransitionPolicy: #상태확정에 필요한 시간
     empty_seconds: float = 5.0
     max_observation_gap: float = 2.0
     stale_seconds: float = 30.0
+    required_empty_checks: int = 1
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
             _validate_seconds(name, value, positive=True)
+        if not isinstance(self.required_empty_checks, int):
+            raise ValueError("required_empty_checks must be an integer")
         if self.max_observation_gap >= self.stale_seconds:
             raise ValueError("max_observation_gap must be less than stale_seconds")
 
@@ -84,11 +87,16 @@ class SeatStateMachine:
         self._last_input_at: float | None = None
         self._candidate: Status | None = None
         self._candidate_since = now
+        self._verified_checks = 0
         self._state = SeatState(Status.UNKNOWN, now, reason=Reason.STALE_OBSERVATION)
 
     @property
     def state(self) -> SeatState:
         return self._state
+
+    @property
+    def verified_empty_checks(self) -> int:
+        return self._verified_checks
 
     def tick(self, now: float) -> SeatState:
         """Advance the clock even when the camera supplies no observation."""
@@ -101,6 +109,7 @@ class SeatStateMachine:
             and now - self._last_input_at > self.policy.max_observation_gap
         ):
             self._candidate = None
+            self._verified_checks = 0
         last_valid = self._state.last_observed_at
         reference = self._started_at if last_valid is None else last_valid
         if now - reference >= self.policy.stale_seconds:
@@ -122,6 +131,12 @@ class SeatStateMachine:
             reason = Reason.OCCLUDED
         elif observation.empty_verified and (observation.person or observation.belongings):
             reason = Reason.MODEL_CONFLICT
+        if reason or observation.person or observation.belongings or not observation.empty_verified:
+            self._verified_checks = 0
+        else:
+            self._verified_checks = min(self.policy.required_empty_checks, self._verified_checks + 1)
+        if self._state.status == Status.EMPTY and (reason or observation.person or observation.belongings):
+            self._unknown(reason or Reason.LOW_CONFIDENCE, now)
         if reason is not None:
             self._candidate = None
             if self._state.status == Status.UNKNOWN:
@@ -146,10 +161,14 @@ class SeatStateMachine:
             self._candidate = candidate
             self._candidate_since = now
 
-        if candidate == Status.EMPTY and not observation.empty_verified:
-            if self._state.status == Status.UNKNOWN:
-                self._unknown(Reason.LOW_CONFIDENCE, now)
-            return self._state
+        if candidate == Status.EMPTY:
+            needs_confirmation = self._state.status != Status.EMPTY
+            if not observation.empty_verified or (
+                needs_confirmation and self._verified_checks < self.policy.required_empty_checks
+            ):
+                if self._state.status == Status.UNKNOWN:
+                    self._unknown(Reason.LOW_CONFIDENCE, now)
+                return self._state
 
         if self._state.status == candidate or now - self._candidate_since >= delay:
             self._state = SeatState(

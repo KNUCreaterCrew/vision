@@ -1,22 +1,44 @@
 """Single desktop entry point for calibration and local seat detection."""
 
+import argparse
+from contextlib import nullcontext
 import os
 from pathlib import Path
-import re
 import sys
 
 from calibrate import calibrate
 from run_vision import run
-from zeroframe.roi import load_config, validate_ids
+from zeroframe.dev_remote import DevelopmentDesktop
+from zeroframe.roi import load_config
 
 
 ROOT = Path(__file__).resolve().parent
 
 
-def read_settings(room, seats, camera, model):
+def prepare_local_display():
+    """Use the user's single local X display when launched through Remote-SSH."""
+    if not sys.platform.startswith("linux") or os.environ.get("DISPLAY"):
+        return
+    try:
+        displays = [path for path in Path("/tmp/.X11-unix").glob("X[0-9]*")
+                    if path.name[1:].isdigit() and path.is_socket()
+                    and path.stat().st_uid == os.getuid()]
+    except OSError:
+        return
+    if len(displays) != 1:
+        return
+    os.environ["DISPLAY"] = f":{displays[0].name[1:]}"
+    authority = Path.home() / ".Xauthority"
+    if authority.is_file():
+        os.environ.setdefault("XAUTHORITY", str(authority))
+
+
+def read_settings(room, count, camera, model):
     room = room.strip()
-    seat_ids = re.split(r"[\s,]+", seats.strip()) if seats.strip() else []
-    validate_ids(room, seat_ids)
+    if not room or not room.isprintable():
+        raise ValueError("방 ID를 입력하세요.")
+    if not count.strip().isdecimal() or int(count) < 1:
+        raise ValueError("최대 좌석 수는 1 이상의 정수로 입력하세요.")
     try:
         camera_index = int(camera)
     except (TypeError, ValueError) as error:
@@ -28,7 +50,7 @@ def read_settings(room, seats, camera, model):
         raise ValueError("모델 파일 경로를 입력하세요.")
     if not model_path.is_absolute():
         model_path = ROOT / model_path
-    return room, seat_ids, camera_index, model_path
+    return room, int(count), camera_index, model_path
 
 
 class Launcher:
@@ -54,17 +76,17 @@ class Launcher:
             row=1, column=0, columnspan=3, sticky="w", pady=(4, 20))
 
         self.room = tk.StringVar(value="IT4-101")
-        self.seats = tk.StringVar(value="A-01")
+        self.max_seats = tk.StringVar(value="4")
         self.camera = tk.StringVar(value="0")
         self.model = tk.StringVar(value="local/yolo11n.pt")
         for row, (label, variable) in enumerate((
-            ("방 ID", self.room), ("좌석 ID", self.seats),
+            ("방 ID", self.room), ("최대 좌석 수", self.max_seats),
             ("카메라 번호", self.camera), ("YOLO 모델", self.model),
         ), start=2):
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 16), pady=6)
             ttk.Entry(body, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Button(body, text="찾아보기", command=self.choose_model).grid(row=5, column=2, padx=(8, 0))
-        ttk.Label(body, text="좌석 예: A-01 A-02 A-03  ·  카메라 기본값: 0").grid(
+        ttk.Label(body, text="좌석 ID는 지정 순서대로 붙습니다. 최대 개수에 도달하기 전에도 저장할 수 있습니다.").grid(
             row=6, column=0, columnspan=3, sticky="w", pady=(2, 12))
 
         self.saved = tk.StringVar()
@@ -78,8 +100,9 @@ class Launcher:
         ttk.Button(buttons, text="종료", command=root.destroy).pack(side="left")
 
         ttk.Separator(body).grid(row=9, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(body, text="좌석 설정: Space → 꼭짓점 클릭 → N(좌석 확정) → S(저장)\n"
-                  "결과 화면: 빨강 OCCUPIED · 주황 AWAY · 회색 UNKNOWN\n"
+        ttk.Label(body, text="Space로 화면 고정 → 좌석마다 꼭짓점 클릭 후 N → 마지막에 S로 저장\n"
+                  "탐지 화면에서 모든 좌석이 비고 잘 보일 때 E → 빈자리 기준 등록 (이번 실행만)\n"
+                  "빨강 OCCUPIED · 주황 AWAY · 초록 EMPTY · 회색 UNKNOWN\n"
                   "Q / Esc / 카메라 창 닫기: 시작 화면으로 돌아오기\n"
                   "좌석 영역에는 앉은 사람의 머리·어깨·등이 보일 공간도 포함하세요.\n"
                   "카메라 장치·위치가 바뀌면 좌석을 다시 설정하세요.", justify="left").grid(
@@ -106,7 +129,8 @@ class Launcher:
             self.saved.set(f"좌석 파일을 읽을 수 없습니다. '좌석 설정 / 다시 설정'을 사용하세요.\n{error}")
         else:
             self.room.set(config.room_id)
-            self.seats.set(" ".join(seat.seat_id for seat in config.seats))
+            if int(self.max_seats.get()) < len(config.seats):
+                self.max_seats.set(str(len(config.seats)))
             self.saved.set(f"저장됨: {config.room_id} · {len(config.seats)}석 · "
                            f"{config.frame_width}×{config.frame_height} · roi_config.json")
 
@@ -114,8 +138,8 @@ class Launcher:
         hidden = False
         error_message = None
         try:
-            room, seats, camera, model = read_settings(
-                self.room.get(), self.seats.get(), self.camera.get(), self.model.get())
+            room, max_seats, camera, model = read_settings(
+                self.room.get(), self.max_seats.get(), self.camera.get(), self.model.get())
             if action == "detect" and not model.exists():
                 raise ValueError("YOLO 모델이 없습니다. local/yolo11n.pt를 준비하거나 모델 경로를 선택하세요.\n"
                                  "최초 설치·다운로드 방법은 README.md를 참고하세요.")
@@ -123,10 +147,9 @@ class Launcher:
             needs_calibration = action == "calibrate" or not exists
             if not needs_calibration:
                 config = load_config(self.config_path)
-                needs_calibration = (room != config.room_id
-                                     or seats != [seat.seat_id for seat in config.seats])
+                needs_calibration = room != config.room_id or len(config.seats) > max_seats
             if needs_calibration and exists and not self.dialogs.askyesno(
-                "좌석 설정 교체", f"기존 좌석 설정 전체를 {room} / {', '.join(seats)}로 다시 지정할까요?\n"
+                "좌석 설정 교체", f"{room}의 좌석을 최대 {max_seats}개까지 다시 지정할까요?\n"
                 "카메라 화면에서 S로 저장할 때 교체됩니다. Q/Esc로 취소하면 기존 파일을 유지합니다.",
                 parent=self.root,
             ):
@@ -136,7 +159,7 @@ class Launcher:
             hidden = True
             self.root.update_idletasks()
             if needs_calibration:
-                config = calibrate(room, seats, camera=camera, output=self.config_path, overwrite=exists)
+                config = calibrate(room, max_seats=max_seats, camera=camera, output=self.config_path, overwrite=exists)
                 if config is None:
                     self.status.set("좌석 설정을 취소했습니다. 기존 파일은 유지됩니다.")
                     return
@@ -159,20 +182,36 @@ class Launcher:
             self.dialogs.showerror("ZeroFrame 실행 오류", error_message, parent=self.root)
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--dev-remote", action="store_true",
+                       help="개발 전용: SSH 터널을 통해 노트북 브라우저로 Pi 화면 조작")
+    modes.add_argument("--local", action="store_false", dest="dev_remote",
+                       help="SSH 접속에서도 Pi 로컬 창만 사용하고 화면 공유 끄기")
+    parser.set_defaults(dev_remote=(sys.platform.startswith("linux") and (
+        bool(os.environ.get("SSH_CONNECTION")) or os.environ.get("ZEROFRAME_DEV_REMOTE") == "1"
+    )))
+    args = parser.parse_args(argv)
     try:
         import tkinter as tk
     except ImportError:
         print("Tkinter가 필요합니다. Windows: Python의 Tcl/Tk 구성 요소 설치, Pi OS: sudo apt install python3-tk", file=sys.stderr)
         return 1
     os.chdir(ROOT)
+    prepare_local_display()
     try:
-        root = tk.Tk()
-    except tk.TclError as error:
-        print(f"로컬 데스크톱 화면을 열 수 없습니다: {error}", file=sys.stderr)
+        with DevelopmentDesktop() if args.dev_remote else nullcontext():
+            root = tk.Tk()
+            Launcher(root)
+            root.mainloop()
+    except KeyboardInterrupt:
+        return 0
+    except (tk.TclError, OSError, RuntimeError) as error:
+        print(f"시작 창을 열 수 없습니다: {error}\n"
+              "Pi 데스크톱에 로그인하세요. 개발용 원격 조작은 main.py --dev-remote로 실행합니다.\n"
+              "화면 없는 운영은 run_vision.py를 --preview 없이 실행하세요.", file=sys.stderr)
         return 1
-    Launcher(root)
-    root.mainloop()
     return 0
 
 

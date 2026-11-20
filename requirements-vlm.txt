@@ -1,0 +1,5 @@
+# Optional standalone CPU VLM probe. Reuse the installed CPU torch/apt OpenCV.
+# Do not include requirements.txt on Pi: it would install pip OpenCV.
+transformers==4.57.6
+num2words==0.5.14
+psutil==7.0.0

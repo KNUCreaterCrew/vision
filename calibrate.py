@@ -3,13 +3,37 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import sys
 
 from zeroframe.camera import camera_session, read_frame, require_opencv
-from zeroframe.roi import ROIConfig, SeatROI, save_config, validate_ids
+from zeroframe.roi import ROIConfig, SeatROI, load_config, save_config, validate_ids
 
 
 WINDOW = "ZeroFrame - local calibration"
+DEMO_SEATS = ("A-01", "A-02", "B-01", "B-02")
+
+
+def _next_seat_id(room_id, requested, seats):
+    if len(seats) < len(requested):
+        return requested[len(seats)]
+    used = {seat.seat_id for seat in seats}
+    if room_id == "IT4-101" and used.issubset(DEMO_SEATS):
+        for seat_id in DEMO_SEATS:
+            if seat_id not in used:
+                return seat_id
+    last = seats[-1].seat_id
+    suffix = re.search(r"[0-9]+$", last)
+    if suffix:
+        digits = suffix.group()
+        prefix, number, width = last[:suffix.start()], int(digits) + 1, len(digits)
+    else:
+        prefix, number, width = last + "-", 2, 2
+    while True:
+        candidate = f"{prefix}{number:0{width}d}"
+        if candidate not in used:
+            return candidate
+        number += 1
 
 
 def _draw_polygon(cv2, image, points, color, *, closed):
@@ -21,9 +45,22 @@ def _draw_polygon(cv2, image, points, color, *, closed):
         cv2.line(image, points[-1], points[0], color, 2)
 
 
-def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrite=False):
-    validate_ids(room_id, seat_ids)
+def calibrate(room_id, seat_ids=None, *, max_seats=None, camera=0, output="roi_config.json", overwrite=False):
     output = Path(output)
+    if max_seats is not None:
+        if type(max_seats) is not int or max_seats < 1 or seat_ids is not None:
+            raise ValueError("Specify a positive maximum seat count or an explicit seat list.")
+        seat_ids = ["A-01"]
+        if overwrite and output.exists():
+            try:
+                previous = load_config(output)
+            except ValueError:
+                pass  # The operator can replace an invalid coordinate file.
+            else:
+                if previous.room_id == room_id:
+                    seat_ids = [seat.seat_id for seat in previous.seats[:max_seats]]
+    validate_ids(room_id, seat_ids)
+    minimum = 1 if max_seats is not None else len(seat_ids)
     if output.exists() and not overwrite:
         raise FileExistsError(f"{output} already exists; choose --output or explicitly use --overwrite")
     if sys.platform.startswith("linux") and not (
@@ -54,10 +91,11 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
         height, width = snapshot.shape[:2]
         points = []
         seats = []
+        current_id = seat_ids[0]
         message = ""
 
         def on_mouse(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN and len(seats) < len(seat_ids):
+            if event == cv2.EVENT_LBUTTONDOWN and current_id is not None:
                 if 0 <= x < width and 0 <= y < height:
                     points.append((x, y))
 
@@ -71,11 +109,11 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
                 _draw_polygon(cv2, display, seat.polygon, (0, 220, 0), closed=True)
                 cv2.putText(display, seat.seat_id, seat.polygon[0], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 1)
             _draw_polygon(cv2, display, points, (0, 220, 255), closed=False)
-            current_id = seat_ids[len(seats)] if len(seats) < len(seat_ids) else None
-            label = (
-                f"Seat: {current_id} | Points: {len(points)} | Done: {len(seats)}/{len(seat_ids)}"
-                if current_id is not None else "All seats ready: S to save"
-            )
+            label = f"Seat: {current_id} | Points: {len(points)} | Confirmed: {len(seats)}"
+            if max_seats is not None:
+                label += f"/{max_seats}"
+                if current_id is None:
+                    label = f"Confirmed: {len(seats)}/{max_seats} | S: save | U: edit last seat"
             cv2.putText(display, label, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 1)
             cv2.putText(display, "Click corners | N: next | U: undo | S: save | Q: cancel", (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
             cv2.putText(display, "ROI: include seated head/shoulders, not just desk", (10, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
@@ -90,10 +128,12 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
                 if points:
                     points.pop()
                 elif seats:
-                    points.extend(seats.pop().polygon)
-            elif key in (10, 13, ord("n")) and len(seats) < len(seat_ids):
+                    reopened = seats.pop()
+                    current_id = reopened.seat_id
+                    points.extend(reopened.polygon)
+            elif key in (10, 13, ord("n")) and current_id is not None:
                 try:
-                    seat = SeatROI(seat_ids[len(seats)], points)
+                    seat = SeatROI(current_id, points)
                     ROIConfig(room_id, width, height, tuple(seats + [seat]))
                 except ValueError as error:
                     message = f"{current_id}: {len(points)} points; {error}. Click corners, then N/ENTER."
@@ -102,15 +142,18 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
                     seats.append(seat)
                     points.clear()
                     message = ""
-                    print(f"Confirmed {seat.seat_id} ({len(seats)}/{len(seat_ids)}).")
-                    if len(seats) < len(seat_ids):
-                        print(f"Next seat: {seat_ids[len(seats)]}. Click its corners, then N/ENTER.")
+                    if len(seats) == max_seats:
+                        current_id = None
+                        print("Maximum reached. Press S to save.")
                     else:
-                        print("All seats confirmed. Press S to save.")
+                        current_id = _next_seat_id(room_id, seat_ids, seats)
+                        print(f"Confirmed {seat.seat_id}. Next seat: {current_id}. Click corners, then N/ENTER.")
+                        if len(seats) >= minimum:
+                            print("Press S to save, or click to add another seat.")
             elif key == ord("s"):
-                if len(seats) != len(seat_ids) or points:
+                if len(seats) < minimum or points:
                     message = (
-                        f"{len(seats)}/{len(seat_ids)} seats confirmed. "
+                        f"{len(seats)} seats confirmed. "
                         f"{current_id}: {len(points)} points. Click its corners, then N/ENTER before S."
                     )
                     print(message)
@@ -133,13 +176,15 @@ def calibrate(room_id, seat_ids, *, camera=0, output="roi_config.json", overwrit
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--room", required=True, help="Room ID, e.g. IT4-101")
-    parser.add_argument("--seats", required=True, nargs="+", help="Seat IDs in calibration order, e.g. A-01 A-02")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--max-seats", type=int, help="Maximum polygons to draw; seat IDs are assigned automatically")
+    selection.add_argument("--seats", nargs="+", help="Seat IDs in calibration order, e.g. A-01 A-02")
     parser.add_argument("--camera", type=int, default=0, help="Local camera index (default: 0)")
     parser.add_argument("--output", default="roi_config.json", help="Coordinate JSON output")
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing coordinate file")
     args = parser.parse_args(argv)
     try:
-        calibrate(args.room, args.seats, camera=args.camera, output=args.output, overwrite=args.overwrite)
+        calibrate(args.room, args.seats, max_seats=args.max_seats, camera=args.camera, output=args.output, overwrite=args.overwrite)
     except (OSError, ValueError, RuntimeError) as error:
         print(f"Calibration failed: {error}", file=sys.stderr)
         return 1
