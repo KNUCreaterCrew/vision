@@ -101,7 +101,8 @@ class Launcher:
 
         ttk.Separator(body).grid(row=9, column=0, columnspan=3, sticky="ew", pady=18)
         ttk.Label(body, text="Space로 화면 고정 → 좌석마다 꼭짓점 클릭 후 N → 마지막에 S로 저장\n"
-                  "결과 화면: 빨강 OCCUPIED · 주황 AWAY · 회색 UNKNOWN\n"
+                  "탐지 화면에서 모든 좌석이 비고 잘 보일 때 E → 빈자리 기준 등록 (이번 실행만)\n"
+                  "빨강 OCCUPIED · 주황 AWAY · 초록 EMPTY · 회색 UNKNOWN\n"
                   "Q / Esc / 카메라 창 닫기: 시작 화면으로 돌아오기\n"
                   "좌석 영역에는 앉은 사람의 머리·어깨·등이 보일 공간도 포함하세요.\n"
                   "카메라 장치·위치가 바뀌면 좌석을 다시 설정하세요.", justify="left").grid(

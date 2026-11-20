@@ -14,14 +14,19 @@ class VisionRunnerTests(unittest.TestCase):
                  transport=None, publisher=None):
         cv = SimpleNamespace(
             error=type("FakeCVError", (Exception,), {}), WINDOW_AUTOSIZE=1,
-            WND_PROP_VISIBLE=1, namedWindow=Mock(), waitKey=Mock(side_effect=[0, ord("q")]),
+            WND_PROP_VISIBLE=1, namedWindow=Mock(), waitKey=Mock(side_effect=[0, 0, ord("q")]),
             getWindowProperty=Mock(return_value=1), destroyAllWindows=Mock(),
         )
         frame = frame or SimpleNamespace(shape=(480, 640, 3))
         detector = SimpleNamespace(detect=Mock(return_value=[Detection(0, .8, (100, 120, 200, 300))]),
                                    release_frames=Mock())
         detector.detect.side_effect = detect_error
-        stream = SimpleNamespace(read_after=Mock(side_effect=[(1, frame), KeyboardInterrupt()]))
+        samples = [(1, frame)]
+        times = [0, 1, 1.1, 1.2]
+        if preview:
+            samples.append((1.4, SimpleNamespace(shape=(480, 640, 3))))
+            times.extend([1.2, 1.4, 1.4])
+        stream = SimpleNamespace(read_after=Mock(side_effect=[*samples, KeyboardInterrupt()]))
         closed = []
 
         @contextmanager
@@ -39,7 +44,7 @@ class VisionRunnerTests(unittest.TestCase):
              patch.object(run_vision, "LatestCamera", side_effect=session), \
              patch.object(run_vision, "load_transport_config", return_value=transport), \
              patch.object(run_vision, "StatusPublisher", return_value=publisher), \
-             patch.object(run_vision, "monotonic", side_effect=[0, 1, 1.1, 1.2, 2]), \
+             patch.object(run_vision, "monotonic", side_effect=[*times, 12]), \
              patch.object(run_vision, "draw_preview") as draw, \
              patch.dict("os.environ", {"DISPLAY": ":test"}, clear=True), \
              patch("sys.stdout", new_callable=StringIO) as output:
@@ -72,6 +77,50 @@ class VisionRunnerTests(unittest.TestCase):
         self.assertTrue(all(hasattr(state, "last_observed_at") for state in sent_states.values()))
         self.assertEqual(publisher.update.call_args.kwargs, {"inference_count": 1})
 
+    def test_ten_second_schedule_transitions_stale_result_and_expiry(self):
+        now = 0.0
+        starts = []
+        person = Detection(0, .8, (100, 120, 200, 300))
+        bottle = Detection(39, .35, (100, 120, 200, 300))
+        scenes = [[person], [person], [bottle], [bottle], [person], [person],
+                  [person], [person], [], [], []]
+
+        def advance(seconds):
+            nonlocal now
+            now += seconds
+
+        def read(previous_at):
+            if len(starts) == len(scenes):
+                raise KeyboardInterrupt
+            return now, SimpleNamespace(shape=(480, 640, 3))
+
+        def detect(frame):
+            index = len(starts)
+            starts.append(now)
+            advance(2.1 if index == 5 else 0.25)
+            return scenes[index]
+
+        camera = MagicMock()
+        camera.__enter__.return_value.read_after.side_effect = read
+        publisher = MagicMock()
+        with patch.object(run_vision, "LatestCamera", return_value=camera), \
+             patch.object(run_vision, "YoloDetector", return_value=Mock(detect=detect)), \
+             patch.object(run_vision, "require_opencv", return_value=SimpleNamespace(error=RuntimeError)), \
+             patch.object(run_vision, "load_transport_config", return_value=Mock()), \
+             patch.object(run_vision, "StatusPublisher", return_value=publisher), \
+             patch.object(run_vision, "monotonic", side_effect=lambda: now), \
+             patch.object(run_vision, "sleep", side_effect=advance), patch("sys.stdout", new_callable=StringIO):
+            self.assertEqual(run_vision.main(["--config", "examples/roi_config.example.json"]), 0)
+
+        self.assertEqual(starts, list(range(0, 101, 10)))
+        states = [call.args[0]["A-01"] for call in publisher.update.call_args_list]
+        self.assertEqual([state.status.value for state in states], [
+            "UNKNOWN", "OCCUPIED", "OCCUPIED", "AWAY", "AWAY", "AWAY",
+            "UNKNOWN", "OCCUPIED", "OCCUPIED", "OCCUPIED", "UNKNOWN",
+        ])
+        self.assertEqual(states[5].last_observed_at, 30)
+        self.assertEqual(states[-1].last_observed_at, 70)
+
     def test_inference_failure_closes_transport_before_releasing_model(self):
         publisher = MagicMock()
         with self.assertRaisesRegex(RuntimeError, "model failed"):
@@ -87,9 +136,15 @@ class VisionRunnerTests(unittest.TestCase):
             model.assert_not_called()
             camera.assert_not_called()
 
-    def test_preview_renders_and_q_stops_even_without_sampling_delay(self):
-        detector, cv, draw, output = self.run_fake(preview=True)
-        draw.assert_called_once()
+    def test_preview_displays_new_frames_between_checks_without_extra_reports_or_inference(self):
+        publisher = MagicMock()
+        detector, cv, draw, output = self.run_fake(preview=True, transport=Mock(), publisher=publisher)
+        detector.detect.assert_called_once()
+        publisher.update.assert_called_once()
+        first, second = draw.call_args_list
+        self.assertIsNot(first.args[1], second.args[1])
+        self.assertEqual(first.args[3:], second.args[3:])
+        self.assertAlmostEqual(second.kwargs["result_age"], .4)
         cv.namedWindow.assert_called_once()
 
     def test_changed_resolution_and_prediction_failure_release_resources(self):
@@ -102,7 +157,8 @@ class VisionRunnerTests(unittest.TestCase):
 
     def test_invalid_options_and_missing_display_fail_before_loading_model(self):
         with patch.object(run_vision, "YoloDetector") as model:
-            for options in ({"fps": 0}, {"fps": float("nan")}, {"fps": True}, {"camera": -1}):
+            for options in ({"fps": 0}, {"fps": .09}, {"fps": 3.1}, {"fps": float("nan")},
+                            {"fps": True}, {"camera": -1}):
                 with self.subTest(options=options), self.assertRaises(ValueError):
                     run_vision.run("unused", "unused", **options)
             with patch.object(run_vision, "load_config"), \
