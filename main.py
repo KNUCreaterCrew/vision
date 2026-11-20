@@ -4,13 +4,12 @@ import argparse
 from contextlib import nullcontext
 import os
 from pathlib import Path
-import re
 import sys
 
 from calibrate import calibrate
 from run_vision import run
 from zeroframe.dev_remote import DevelopmentDesktop
-from zeroframe.roi import load_config, validate_ids
+from zeroframe.roi import load_config
 
 
 ROOT = Path(__file__).resolve().parent
@@ -34,10 +33,12 @@ def prepare_local_display():
         os.environ.setdefault("XAUTHORITY", str(authority))
 
 
-def read_settings(room, seats, camera, model):
+def read_settings(room, count, camera, model):
     room = room.strip()
-    seat_ids = re.split(r"[\s,]+", seats.strip()) if seats.strip() else []
-    validate_ids(room, seat_ids)
+    if not room or not room.isprintable():
+        raise ValueError("방 ID를 입력하세요.")
+    if not count.strip().isdecimal() or int(count) < 1:
+        raise ValueError("최대 좌석 수는 1 이상의 정수로 입력하세요.")
     try:
         camera_index = int(camera)
     except (TypeError, ValueError) as error:
@@ -49,7 +50,7 @@ def read_settings(room, seats, camera, model):
         raise ValueError("모델 파일 경로를 입력하세요.")
     if not model_path.is_absolute():
         model_path = ROOT / model_path
-    return room, seat_ids, camera_index, model_path
+    return room, int(count), camera_index, model_path
 
 
 class Launcher:
@@ -75,17 +76,17 @@ class Launcher:
             row=1, column=0, columnspan=3, sticky="w", pady=(4, 20))
 
         self.room = tk.StringVar(value="IT4-101")
-        self.seats = tk.StringVar(value="A-01")
+        self.max_seats = tk.StringVar(value="4")
         self.camera = tk.StringVar(value="0")
         self.model = tk.StringVar(value="local/yolo11n.pt")
         for row, (label, variable) in enumerate((
-            ("방 ID", self.room), ("좌석 ID", self.seats),
+            ("방 ID", self.room), ("최대 좌석 수", self.max_seats),
             ("카메라 번호", self.camera), ("YOLO 모델", self.model),
         ), start=2):
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 16), pady=6)
             ttk.Entry(body, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Button(body, text="찾아보기", command=self.choose_model).grid(row=5, column=2, padx=(8, 0))
-        ttk.Label(body, text="좌석 예: A-01 A-02 A-03  ·  카메라 기본값: 0").grid(
+        ttk.Label(body, text="좌석 ID는 지정 순서대로 붙습니다. 최대 개수에 도달하기 전에도 저장할 수 있습니다.").grid(
             row=6, column=0, columnspan=3, sticky="w", pady=(2, 12))
 
         self.saved = tk.StringVar()
@@ -99,7 +100,7 @@ class Launcher:
         ttk.Button(buttons, text="종료", command=root.destroy).pack(side="left")
 
         ttk.Separator(body).grid(row=9, column=0, columnspan=3, sticky="ew", pady=18)
-        ttk.Label(body, text="좌석 설정: Space → 꼭짓점 클릭 → N(좌석 확정) → S(저장)\n"
+        ttk.Label(body, text="Space로 화면 고정 → 좌석마다 꼭짓점 클릭 후 N → 마지막에 S로 저장\n"
                   "결과 화면: 빨강 OCCUPIED · 주황 AWAY · 회색 UNKNOWN\n"
                   "Q / Esc / 카메라 창 닫기: 시작 화면으로 돌아오기\n"
                   "좌석 영역에는 앉은 사람의 머리·어깨·등이 보일 공간도 포함하세요.\n"
@@ -127,7 +128,8 @@ class Launcher:
             self.saved.set(f"좌석 파일을 읽을 수 없습니다. '좌석 설정 / 다시 설정'을 사용하세요.\n{error}")
         else:
             self.room.set(config.room_id)
-            self.seats.set(" ".join(seat.seat_id for seat in config.seats))
+            if int(self.max_seats.get()) < len(config.seats):
+                self.max_seats.set(str(len(config.seats)))
             self.saved.set(f"저장됨: {config.room_id} · {len(config.seats)}석 · "
                            f"{config.frame_width}×{config.frame_height} · roi_config.json")
 
@@ -135,8 +137,8 @@ class Launcher:
         hidden = False
         error_message = None
         try:
-            room, seats, camera, model = read_settings(
-                self.room.get(), self.seats.get(), self.camera.get(), self.model.get())
+            room, max_seats, camera, model = read_settings(
+                self.room.get(), self.max_seats.get(), self.camera.get(), self.model.get())
             if action == "detect" and not model.exists():
                 raise ValueError("YOLO 모델이 없습니다. local/yolo11n.pt를 준비하거나 모델 경로를 선택하세요.\n"
                                  "최초 설치·다운로드 방법은 README.md를 참고하세요.")
@@ -144,10 +146,9 @@ class Launcher:
             needs_calibration = action == "calibrate" or not exists
             if not needs_calibration:
                 config = load_config(self.config_path)
-                needs_calibration = (room != config.room_id
-                                     or seats != [seat.seat_id for seat in config.seats])
+                needs_calibration = room != config.room_id or len(config.seats) > max_seats
             if needs_calibration and exists and not self.dialogs.askyesno(
-                "좌석 설정 교체", f"기존 좌석 설정 전체를 {room} / {', '.join(seats)}로 다시 지정할까요?\n"
+                "좌석 설정 교체", f"{room}의 좌석을 최대 {max_seats}개까지 다시 지정할까요?\n"
                 "카메라 화면에서 S로 저장할 때 교체됩니다. Q/Esc로 취소하면 기존 파일을 유지합니다.",
                 parent=self.root,
             ):
@@ -157,7 +158,7 @@ class Launcher:
             hidden = True
             self.root.update_idletasks()
             if needs_calibration:
-                config = calibrate(room, seats, camera=camera, output=self.config_path, overwrite=exists)
+                config = calibrate(room, max_seats=max_seats, camera=camera, output=self.config_path, overwrite=exists)
                 if config is None:
                     self.status.set("좌석 설정을 취소했습니다. 기존 파일은 유지됩니다.")
                     return

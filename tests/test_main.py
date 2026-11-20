@@ -75,22 +75,22 @@ class LauncherTests(unittest.TestCase):
         model = Path(directory) / "yolo11n.pt"
         model.touch()
         app.room = SimpleNamespace(get=lambda: "IT4-101", set=Mock())
-        app.seats = SimpleNamespace(get=lambda: "A-01 A-02", set=Mock())
+        app.max_seats = SimpleNamespace(get=lambda: "4", set=Mock())
         app.camera = SimpleNamespace(get=lambda: "0")
         app.model = SimpleNamespace(get=lambda: str(model))
         app.status = Mock()
         app.saved = Mock()
         return app
 
-    def test_settings_accept_spaces_commas_and_resolve_model_relative_to_repository(self):
-        room, seats, camera, model = main.read_settings(" R ", "A-01, A-02\nA-03", "1", "local/model.pt")
-        self.assertEqual((room, seats, camera), ("R", ["A-01", "A-02", "A-03"], 1))
+    def test_settings_accept_count_and_resolve_model_relative_to_repository(self):
+        room, seats, camera, model = main.read_settings(" R ", " 3 ", "1", "local/model.pt")
+        self.assertEqual((room, seats, camera), ("R", 3, 1))
         self.assertEqual(model, main.ROOT / "local/model.pt")
 
     def test_invalid_fields_are_rejected(self):
-        for room, seats, camera, model in (("", "A", "0", "x.pt"), ("R", "", "0", "x.pt"),
-                                           ("R", "A A", "0", "x.pt"), ("R", "A", "-1", "x.pt"),
-                                           ("R", "A", "1.5", "x.pt"), ("R", "A", "0", "")):
+        for room, seats, camera, model in (("", "1", "0", "x.pt"), ("R", "", "0", "x.pt"),
+                                           ("R", "0", "0", "x.pt"), ("R", "1", "-1", "x.pt"),
+                                           ("R", "1", "1.5", "x.pt"), ("R", "1", "0", "")):
             with self.subTest(room=room, seats=seats, camera=camera), self.assertRaises(ValueError):
                 main.read_settings(room, seats, camera, model)
 
@@ -99,8 +99,8 @@ class LauncherTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             app = self.launcher(directory)
 
-            def calibrate(room, seats, *, camera, output, overwrite):
-                self.assertEqual((room, seats, camera, overwrite), ("IT4-101", ["A-01", "A-02"], 0, False))
+            def calibrate(room, *, max_seats, camera, output, overwrite):
+                self.assertEqual((room, max_seats, camera, overwrite), ("IT4-101", 4, 0, False))
                 save_config(config, output)
                 return config
 
@@ -157,16 +157,16 @@ class LauncherTests(unittest.TestCase):
             run.assert_not_called()
             app.dialogs.showerror.assert_not_called()
 
-    def test_modified_seat_list_requires_recalibration_and_confirmation(self):
+    def test_reducing_limit_below_saved_count_requires_confirmation(self):
         with TemporaryDirectory() as directory:
             app = self.launcher(directory)
             save_config(load_config("examples/roi_config.example.json"), app.config_path)
-            app.seats.get = lambda: "B-01"
+            app.max_seats.get = lambda: "1"
             with patch.object(main, "calibrate", return_value=None) as calibrate, patch.object(main, "run") as run:
                 app.launch("detect")
             app.dialogs.askyesno.assert_called_once()
             calibrate.assert_called_once()
-            self.assertEqual(calibrate.call_args.args, ("IT4-101", ["B-01"]))
+            self.assertEqual(calibrate.call_args.kwargs["max_seats"], 1)
             run.assert_not_called()
 
     def test_camera_or_inference_error_restores_window_and_shows_error(self):

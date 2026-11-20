@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
 
@@ -96,6 +96,7 @@ def _polygon_box_area(polygon, bbox):
 class SeatROI:
     seat_id: str
     polygon: tuple[tuple[int, int], ...]
+    area: float = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         _identifier(self.seat_id, "seat_id")
@@ -112,7 +113,8 @@ class SeatROI:
         if len(set(polygon)) != len(polygon):
             raise ValueError("polygon vertices must be distinct; do not repeat the first vertex")
         edges = list(zip(polygon, polygon[1:] + polygon[:1]))
-        if sum(a[0] * b[1] - b[0] * a[1] for a, b in edges) == 0:
+        double_area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in edges))
+        if double_area == 0:
             raise ValueError("polygon must have nonzero area")
         for i, (a, b) in enumerate(edges):
             for j in range(i + 1, len(edges)):
@@ -121,6 +123,7 @@ class SeatROI:
                 if _intersects(a, b, *edges[j]):
                     raise ValueError("polygon edges must not intersect or touch themselves")
         object.__setattr__(self, "polygon", polygon)
+        object.__setattr__(self, "area", double_area / 2)
 
 
 @dataclass(frozen=True)
@@ -166,8 +169,9 @@ class ROIConfig:
         point = ((x1 + x2) / 2, y2)
         return tuple(seat.seat_id for seat in self.seats if _contains(seat.polygon, point))
 
-    def overlapping_seat_ratios(self, bbox, *, frame_width: int, frame_height: int) -> dict[str, float]:
-        """Fraction of the visible detection box inside each seat; omit zero-area contact."""
+    def overlapping_seat_ratios(self, bbox, *, frame_width: int, frame_height: int,
+                                normalize_to_smaller: bool = False) -> dict[str, float]:
+        """Overlap as a fraction of the box, or of the smaller shape for person mapping."""
         self._validate_bbox(bbox, frame_width, frame_height)
         x1, y1, x2, y2 = bbox
         box_area = (x2 - x1) * (y2 - y1)
@@ -177,7 +181,8 @@ class ROIConfig:
         for seat in self.seats:
             area = _polygon_box_area(seat.polygon, bbox)
             if area > 0:
-                ratios[seat.seat_id] = min(area / box_area, 1.0)
+                denominator = min(box_area, seat.area) if normalize_to_smaller else box_area
+                ratios[seat.seat_id] = min(area / denominator, 1.0)
         return ratios
 
     def to_dict(self):

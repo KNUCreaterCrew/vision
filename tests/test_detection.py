@@ -18,7 +18,8 @@ class MappingTests(unittest.TestCase):
                                  frame_width=640, frame_height=480)
 
     def test_class_specific_thresholds_and_all_belongings_classes(self):
-        for cls, threshold in ((0, .5), (24, .45), (26, .45), (63, .45), (73, .45)):
+        for cls in (0, 24, 26, 39, 63, 67, 73):
+            threshold = .50 if cls == 0 else .35
             for confidence, accepted in ((threshold, True), (threshold - .001, False)):
                 with self.subTest(cls=cls, confidence=confidence):
                     observations = self.observations([Detection(cls, confidence, (100, 120, 200, 300))])
@@ -154,6 +155,22 @@ class TrackerTests(unittest.TestCase):
             result = self.update(second, [person])
         self.assertEqual(result["A-01"].status, Status.OCCUPIED)
         self.assertEqual(result["A-02"].status, Status.UNKNOWN)
+
+    def test_large_person_box_can_confirm_a_small_seat(self):
+        config = ROIConfig("room", 640, 480, (
+            SeatROI("small", ((80, 180), (120, 180), (120, 220), (80, 220))),
+            SeatROI("next", ((180, 180), (220, 180), (220, 220), (180, 220))),
+        ))
+        for right, expected in ((99.9, Status.UNKNOWN), (100, Status.OCCUPIED),
+                                (160, Status.OCCUPIED), (190, Status.UNKNOWN)):
+            with self.subTest(right=right):
+                tracker = SeatTracker(config, now=0)
+                person = Detection(0, .9, (20, 40, right, 400))
+                for second in (0, 1, 2):
+                    states = tracker.update([person], observed_at=second, now=second,
+                                            frame_width=640, frame_height=480)
+                self.assertEqual(states["small"].status, expected)
+                self.assertEqual(states["next"].status, Status.UNKNOWN)
 
     def test_invalid_completion_times_do_not_modify_states(self):
         before = self.tracker.tick(10)

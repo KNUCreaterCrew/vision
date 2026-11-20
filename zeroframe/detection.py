@@ -8,7 +8,10 @@ from pathlib import Path
 from .state import Observation, SeatStateMachine, _validate_seconds
 
 
-CLASSES = {0: "person", 24: "backpack", 26: "handbag", 63: "laptop", 73: "book"}
+CLASSES = {
+    0: "person", 24: "backpack", 26: "handbag", 39: "bottle",
+    63: "laptop", 67: "cell phone", 73: "book",
+}
 
 
 @dataclass(frozen=True)
@@ -38,9 +41,9 @@ class Detection:
         object.__setattr__(self, "bbox", tuple(self.bbox))
 
     @property
-    def accepted(self): #사람 0.5 물건 0.45 신뢰도
+    def accepted(self):
         return self.class_id in CLASSES and self.confidence >= (
-            0.50 if self.class_id == 0 else 0.45
+            0.50 if self.class_id == 0 else 0.35
         )
 
 
@@ -53,7 +56,8 @@ def seat_observations(config, detections, *, observed_at, frame_width, frame_hei
         strong_overlap = True
         if detection.class_id == 0:
             overlaps = config.overlapping_seat_ratios(
-                detection.bbox, frame_width=frame_width, frame_height=frame_height
+                detection.bbox, frame_width=frame_width, frame_height=frame_height,
+                normalize_to_smaller=True,
             )
             candidates = tuple(overlaps)
             strong_overlap = len(candidates) == 1 and overlaps[candidates[0]] >= 0.5

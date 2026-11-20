@@ -41,14 +41,16 @@ def fake_cv(actions):
 
 
 class CalibrationTests(unittest.TestCase):
-    def run_calibration(self, path, actions, *, seat_ids=None, display=None, **kwargs):
+    def run_calibration(self, path, actions, *, seat_ids=None, room="R", display=None, **kwargs):
         cv = fake_cv(actions)
         with patch("calibrate.require_opencv", return_value=cv), \
              patch("calibrate.camera_session", return_value=nullcontext(object())), \
              patch("calibrate.read_frame", return_value=FakeFrame()), \
              patch.dict("os.environ", {"DISPLAY": ":test"} if display is None else display, clear=True), \
              patch("sys.stdout") as stdout:
-            result = calibrate("R", ["A-01"] if seat_ids is None else seat_ids, output=path, **kwargs)
+            if seat_ids is None and "max_seats" not in kwargs:
+                seat_ids = ["A-01"]
+            result = calibrate(room, seat_ids, output=path, **kwargs)
         self.output = "".join(call.args[0] for call in stdout.write.call_args_list)
         cv.destroyAllWindows.assert_called_once()
         return result
@@ -73,7 +75,53 @@ class CalibrationTests(unittest.TestCase):
             ], seat_ids=["A-01", "A-02"])
             self.assertEqual([seat.seat_id for seat in result.seats], ["A-01", "A-02"])
             self.assertIn("Next seat: A-02", self.output)
-            self.assertIn("All seats confirmed", self.output)
+            self.assertIn("Press S to save", self.output)
+
+    def test_single_starting_id_can_save_four_registered_seats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roi.json"
+            polygons = [[(x, 10), (x + 30, 10), (x, 40)] for x in (10, 110, 210, 310)]
+            self.run_calibration(path, [(32, [])] + [(ord("n"), p) for p in polygons]
+                                 + [(ord("s"), [])], room="IT4-101")
+            seats = load_config(path).seats
+            self.assertEqual([s.seat_id for s in seats], ["A-01", "A-02", "B-01", "B-02"])
+            self.assertEqual([list(s.polygon) for s in seats], polygons)
+
+    def test_count_limit_ignores_extra_clicks_and_allows_undo_at_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roi.json"
+            result = self.run_calibration(path, [
+                (32, []), (ord("n"), [(0, 0), (20, 0), (20, 20)]),
+                (ord("n"), [(40, 0), (60, 0), (60, 20)]),
+                (ord("n"), [(80, 0), (100, 0), (100, 20)]),
+                (ord("u"), []), (ord("u"), []), (ord("n"), [(60, 30)]),
+                (ord("s"), [(80, 0)]),
+            ], room="IT4-101", max_seats=2)
+            self.assertEqual([s.seat_id for s in result.seats], ["A-01", "A-02"])
+            self.assertEqual(result.seats[-1].polygon[-1], (60, 30))
+
+    def test_count_mode_can_save_early_and_preserves_existing_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roi.json"
+            self.run_calibration(path, [(32, []), (ord("n"), [(0, 0), (20, 0), (0, 20)]),
+                                 (ord("n"), [(40, 0), (60, 0), (40, 20)]), (ord("s"), [])],
+                                 seat_ids=["Desk-09", "Lab-22"])
+            result = self.run_calibration(path, [(32, []), (ord("s"), []),
+                                 (ord("n"), [(10, 10), (30, 10), (10, 30)]), (ord("s"), [])],
+                                 max_seats=4, overwrite=True)
+            self.assertEqual([s.seat_id for s in result.seats], ["Desk-09"])
+            self.assertEqual(load_config(path), result)
+
+    def test_unfinished_extra_seat_blocks_save_and_undo_reopens_same_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roi.json"
+            result = self.run_calibration(path, [
+                (32, []), (ord("n"), [(0, 0), (30, 0), (0, 30)]),
+                (ord("s"), [(50, 0)]), (13, [(80, 0), (50, 30)]),
+                (ord("u"), []), (ord("u"), []), (13, [(50, 40)]), (ord("s"), []),
+            ], seat_ids=["Desk-09"])
+            self.assertEqual([s.seat_id for s in result.seats], ["Desk-09", "Desk-10"])
+            self.assertEqual(result.seats[1].polygon[-1], (50, 40))
 
     def test_cancellation_leaves_existing_coordinates_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -92,7 +140,7 @@ class CalibrationTests(unittest.TestCase):
             ])
             self.assertFalse(path.exists())
             self.assertIn("A-01: 2 points", self.output)
-            self.assertIn("0/1 seats confirmed", self.output)
+            self.assertIn("0 seats confirmed", self.output)
 
     def test_undo_reopens_last_seat_for_correction(self):
         with tempfile.TemporaryDirectory() as directory:
