@@ -4,6 +4,8 @@ import argparse
 from contextlib import nullcontext
 import os
 from pathlib import Path
+import socket
+import subprocess
 import sys
 
 from calibrate import calibrate
@@ -13,6 +15,36 @@ from zeroframe.roi import load_config
 
 
 ROOT = Path(__file__).resolve().parent
+
+
+def run_vlm_preview(config_path, model, camera):
+    """Keep Pi swap off until the process owning the preview and model has exited."""
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("실시간 VLM 재판정는 Linux에서 실행하세요.")
+    command = [sys.executable, str(ROOT / "run_vision.py"), "--config", str(config_path),
+               "--model", str(model), "--camera", str(camera), "--preview", "--vlm-empty"]
+    # Serialize GUI sessions even when the first launcher has already stopped swap.
+    with socket.socket(socket.AF_UNIX) as lock:
+        try:
+            lock.bind("\0zeroframe-vlm-preview")
+        except OSError as error:
+            raise RuntimeError("VLM 재판정을 시작할 수 없습니다. 다른 비교 창이 열려 있는지 확인하세요.") from error
+        active = [line.split()[0] for line in Path("/proc/swaps").read_text().splitlines()[1:]]
+        unit = "dev-zram0.swap"
+        if active:
+            if active != ["/dev/zram0"]:
+                raise RuntimeError("다른 스왑이 켜져 있습니다. docs/vlm-probe.md의 수동 실행 방법을 확인하세요.")
+            if subprocess.run(["systemctl", "is-active", "--quiet", unit]).returncode:
+                raise RuntimeError("systemd에서 활성 zram을 확인할 수 없습니다. 스왑 설정을 확인하세요.")
+            if subprocess.run(["sudo", "-n", "systemctl", "stop", unit]).returncode:
+                raise RuntimeError("스왑을 중지하지 못했습니다. 터미널에서 sudo systemctl stop dev-zram0.swap 실행 후 다시 시도하고, 비교 종료 후 sudo systemctl start dev-zram0.swap 으로 복구하세요.")
+        try:
+            # The child rechecks /proc/swaps before opening the camera.
+            if subprocess.run(command).returncode:
+                raise RuntimeError("VLM 재판정이 종료되었습니다. 실행 터미널의 오류를 확인하세요.")
+        finally:
+            if active and subprocess.run(["sudo", "-n", "systemctl", "start", unit]).returncode:
+                raise RuntimeError("스왑 복구에 실패했습니다. sudo systemctl start dev-zram0.swap 을 실행하세요.")
 
 
 def prepare_local_display():
@@ -95,6 +127,7 @@ class Launcher:
         buttons = ttk.Frame(body)
         buttons.grid(row=8, column=0, columnspan=3, sticky="w")
         ttk.Button(buttons, text="탐지 시작", command=lambda: self.launch("detect")).pack(side="left")
+        ttk.Button(buttons, text="탐지 + VLM 빈자리 재판정", command=lambda: self.launch("compare")).pack(side="left", padx=4)
         ttk.Button(buttons, text="좌석 설정 / 다시 설정", command=lambda: self.launch("calibrate")).pack(
             side="left", padx=10)
         ttk.Button(buttons, text="종료", command=root.destroy).pack(side="left")
@@ -140,7 +173,7 @@ class Launcher:
         try:
             room, max_seats, camera, model = read_settings(
                 self.room.get(), self.max_seats.get(), self.camera.get(), self.model.get())
-            if action == "detect" and not model.exists():
+            if action in ("detect", "compare") and not model.exists():
                 raise ValueError("YOLO 모델이 없습니다. local/yolo11n.pt를 준비하거나 모델 경로를 선택하세요.\n"
                                  "최초 설치·다운로드 방법은 README.md를 참고하세요.")
             exists = self.config_path.exists()
@@ -163,8 +196,11 @@ class Launcher:
                 if config is None:
                     self.status.set("좌석 설정을 취소했습니다. 기존 파일은 유지됩니다.")
                     return
-            if action == "detect":
-                run(self.config_path, model, camera=camera, preview=True)
+            if action in ("detect", "compare"):
+                if action == "compare":
+                    run_vlm_preview(self.config_path, model, camera)
+                else:
+                    run(self.config_path, model, camera=camera, preview=True, vlm_compare=False)
                 self.status.set("탐지가 종료되었습니다. 다시 시작하거나 좌석을 다시 설정할 수 있습니다.")
             else:
                 self.status.set("좌석을 저장했습니다. '탐지 시작'을 누르세요.")

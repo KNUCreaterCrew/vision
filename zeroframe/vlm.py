@@ -84,7 +84,7 @@ def parse_label(text, *, complete=True):
     return label, "MODEL_UNKNOWN" if label == Status.UNKNOWN else None
 
 
-def protect_camera_process(*, live):
+def protect_camera_process(*, live, worker=True):
     """Fail before camera startup unless Linux swap/dumps are disabled."""
     if not sys.platform.startswith("linux"):
         if live:
@@ -97,16 +97,28 @@ def protect_camera_process(*, live):
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE = 4
         raise RuntimeError("Cannot disable process dumps before VLM inference.")
-    if libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG = 1
+    if worker and libc.prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG = 1
         raise RuntimeError("Cannot bind the VLM process lifetime to its parent.")
     if live and len(Path("/proc/swaps").read_text().splitlines()) > 1:
         raise RuntimeError(
-            "Live probe requires swap disabled before camera startup. "
-            "See docs/vlm-probe.md for temporary Pi swapoff/swapon commands."
+            "Live VLM requires swap disabled before camera startup. "
+            "Pi: sudo systemctl stop dev-zram0.swap (restore after exit). See docs/vlm-probe.md."
         )
 
 
-def seat_image(frame, config, seat_id):
+def stop_worker(process, connection):
+    connection.close()
+    if process.is_alive():
+        process.terminate()
+    process.join(timeout=2)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=2)
+    if process.is_alive():
+        raise RuntimeError("VLM worker did not stop; close this process before another probe.")
+
+
+def seat_image(frame, config, seat_id, *, lighting_lut=None):
     """Copy only the selected polygon to a RAM RGB image; mask adjacent content."""
     if frame.shape != (config.frame_height, config.frame_width, 3):
         raise ValueError("Camera resolution differs from calibration; recalibrate first.")
@@ -130,6 +142,8 @@ def seat_image(frame, config, seat_id):
         mask = np.zeros(crop.shape[:2], dtype=np.uint8)
         points = np.array([(x - left, y - top) for x, y in seat.polygon], dtype=np.int32)
         cv2.fillPoly(mask, [points], 255)
+        if lighting_lut is not None:
+            crop = cv2.LUT(crop, lighting_lut)
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         visibility = visibility_stats(gray[mask > 0], width=crop.shape[1], height=crop.shape[0])
         gray = None

@@ -10,7 +10,7 @@ from time import monotonic
 from prepare_vlm import DEFAULT_MODEL, MODEL_ID, MODEL_REVISION
 from zeroframe.roi import load_config
 from zeroframe.state import Status
-from zeroframe.vlm import LocalSeatVLM, protect_camera_process, seat_image
+from zeroframe.vlm import LocalSeatVLM, protect_camera_process, seat_image, stop_worker
 from zeroframe.vlm_eval import summarize_results
 
 
@@ -113,18 +113,6 @@ def receive_message(connection, timeout):
     if result["type"] == "error":
         raise RuntimeError(f"{result['error_type']}: {result['message']}")
     return result
-
-
-def stop_worker(process, connection):
-    connection.close()
-    if process.is_alive():
-        process.terminate()
-    process.join(timeout=2)
-    if process.is_alive():
-        process.kill()
-        process.join(timeout=2)
-    if process.is_alive():
-        raise RuntimeError("VLM worker did not stop; close this process before another probe.")
 
 
 def run_probe(settings, *, samples=3, timeout=15, expected=None, interactive=False, cases=None, report_path=None):

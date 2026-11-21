@@ -13,6 +13,7 @@ from zeroframe.empty_reference import EmptyReference
 from zeroframe.roi import load_config
 from zeroframe.state import TransitionPolicy
 from zeroframe.transport import load_transport_config, StatusPublisher
+from zeroframe.vlm_compare import VLMComparison
 
 
 WINDOW = "ZeroFrame - local YOLO (Q/ESC to quit)"
@@ -23,7 +24,7 @@ COLORS = {"UNKNOWN": (150, 150, 150), "OCCUPIED": (0, 0, 255),
 
 
 def draw_preview(cv2, frame, config, detections, states, *, fps, latency_ms, stale, result_age,
-                 reference_label, empty_progress):
+                 reference_label, empty_progress, vlm_label=None):
     for seat in config.seats:
         color = COLORS[states[seat.seat_id].status.value]
         points = seat.polygon
@@ -44,11 +45,13 @@ def draw_preview(cv2, frame, config, detections, states, *, fps, latency_ms, sta
             f"last check {result_age:.1f}s ago{' (STALE: discarded)' if stale else ''}")
     cv2.putText(frame, text, (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     cv2.putText(frame, reference_label, (10, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    if vlm_label:
+        cv2.putText(frame, vlm_label, (10, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     cv2.imshow(WINDOW, frame)
 
 
 def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, transport_config=None,
-        confirm_empty_at_start=False):
+        confirm_empty_at_start=False, vlm_compare=False, vlm_empty=False):
     if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not isfinite(fps) or not 0.1 <= fps <= 3:
         raise ValueError("fps must be between 0.1 and 3")
     if isinstance(camera, bool) or not isinstance(camera, int) or camera < 0:
@@ -89,9 +92,25 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
         if preview:
             cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
             window_open = True
-        with publisher if publisher is not None else nullcontext(), LatestCamera(camera) as stream:
+        with (VLMComparison(config) if vlm_compare or vlm_empty else nullcontext()) as comparison, \
+             (publisher if publisher is not None else nullcontext()), LatestCamera(camera) as stream:
             while True:
                 now = monotonic()
+                if comparison is not None:
+                    reply = comparison.poll(count)
+                    if vlm_empty and reply is not None and now < next_analysis:
+                        seat, captured, label = reply
+                        machine = tracker.machines[seat]
+                        if machine.review_vlm(label, captured, now):
+                            states = tracker.tick(now)
+                            empty_progress.pop(seat, None)
+                            if publisher is not None:
+                                publisher.update(states, inference_count=count)
+                            comparison.label += f" -> seat {states[seat].status.value}"
+                            print(comparison.label, flush=True)
+                        elif machine.vlm_first_empty_at == captured:
+                            comparison.label += " (VLM empty 1/2)"
+                            print(comparison.label, flush=True)
                 if preview:
                     key = cv2.waitKey(1) & 0xFF
                     if key in (27, ord("q")) or cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
@@ -104,7 +123,11 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                 next_frame = min(next_preview, next_analysis) if preview else next_analysis
                 if now < next_frame:
                     remaining = next_frame - now
-                    sleep(min(0.02, remaining) if preview else remaining)
+                    if preview:
+                        remaining = min(.02, remaining)
+                    elif comparison is not None:
+                        remaining = min(.25, remaining)
+                    sleep(remaining)
                     continue
                 sample = stream.read_after(previous_at)
                 if sample is None:
@@ -133,6 +156,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                     finished_at = monotonic()
                     latency_ms = (finished_at - inference_start) * 1000
                     matches = None
+                    lighting_luts = {} if vlm_empty else None
                     if enroll:
                         enroll = False
                         try:
@@ -155,7 +179,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                                                f"Reference rejected: {error}. Retry with all seats clear.")
                         print(reference_label, flush=True)
                     elif reference is not None and finished_at - observed_at <= MAX_RESULT_AGE_SECONDS:
-                        matches = reference.compare(frame)
+                        matches = reference.compare(frame, lighting_luts=lighting_luts)
                         finished_at = monotonic()
                     stale = finished_at - observed_at > MAX_RESULT_AGE_SECONDS
                     states = tracker.update(detections, observed_at=observed_at, now=finished_at,
@@ -169,6 +193,13 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                     count += 1
                     if publisher is not None:
                         publisher.update(states, inference_count=count)
+                    if comparison is not None and not stale:
+                        reviews = None
+                        if vlm_empty:
+                            reviews = {seat: machine.vlm_first_empty_at is not None
+                                       for seat, machine in tracker.machines.items()
+                                       if machine.vlm_review_at == observed_at}
+                        comparison.submit(frame, states, count, observed_at, reviews=reviews, lighting_luts=lighting_luts)
                     measured_fps = count / max(finished_at - started_at, 0.001)
                     if finished_at >= next_report:
                         seat_log = []
@@ -178,7 +209,18 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                                 detail += f"({state.reason.value})"
                             if matches is not None:
                                 reference_result = {True: "match", None: "marginal", False: "different"}
-                                detail += f"[ref={reference_result[matches[seat_id]]}]"
+                                result = "low-light" if lighting_luts and seat_id in lighting_luts else reference_result[matches[seat_id]]
+                                detail += f"[ref={result}]"
+                                if matches[seat_id] is None:
+                                    if not vlm_empty:
+                                        review = "off"
+                                    elif stale:
+                                        review = "stale"
+                                    elif seat_id not in reviews:
+                                        review = "YOLO-blocked"
+                                    else:
+                                        review = comparison.label
+                                    detail += f"[vlm={review}]"
                             if seat_id in empty_progress:
                                 detail += f"[empty={empty_progress[seat_id]}]"
                             seat_log.append(detail)
@@ -191,7 +233,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                     draw_preview(cv2, frame, config, detections, states,
                                  fps=measured_fps, latency_ms=latency_ms, stale=stale,
                                  result_age=displayed_at - last_analysis_at, reference_label=reference_label,
-                                 empty_progress=empty_progress)
+                                 empty_progress=empty_progress, vlm_label=comparison.label if comparison else None)
                     next_preview = displayed_at + 1 / PREVIEW_FPS
                 frame = None
     except cv2.error as error:
@@ -213,13 +255,17 @@ def main(argv=None):
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS,
                         help="target analysis FPS (0.1-3, default 0.1: one check every 10 seconds)")
     parser.add_argument("--preview", action="store_true", help="show frames on the local desktop only")
+    vlm_mode = parser.add_mutually_exclusive_group()
+    vlm_mode.add_argument("--vlm-compare", action="store_true", help="display local VLM comparisons only")
+    vlm_mode.add_argument("--vlm-empty", action="store_true", help="use two local VLM checks to resolve a marginal empty reference")
     parser.add_argument("--confirm-empty-at-start", action="store_true",
                         help="confirm ALL calibrated seats are clear of people and belongings for the first frame")
     parser.add_argument("--transport-config", help="backend settings JSON; defaults to repository transport_config.json")
     args = parser.parse_args(argv)
     try:
         run(args.config, args.model, camera=args.camera, fps=args.fps, preview=args.preview,
-            transport_config=args.transport_config, confirm_empty_at_start=args.confirm_empty_at_start)
+            transport_config=args.transport_config, confirm_empty_at_start=args.confirm_empty_at_start,
+            vlm_compare=args.vlm_compare, vlm_empty=args.vlm_empty)
     except KeyboardInterrupt:
         print("Stopped; camera released. No images saved.")
         return 0

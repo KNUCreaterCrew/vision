@@ -103,15 +103,20 @@ class SeatTracker:
         if now - observed_at <= MAX_RESULT_AGE_SECONDS:
             for seat_id, machine in self.machines.items():
                 obs = observations[seat_id]
+                marginal_reference = False
                 if empty_matches is not None and not (obs.person or obs.belongings):
                     match = empty_matches[seat_id]
                     if obs.view_clear:
+                        marginal_reference = match is None
                         obs = replace(obs, view_clear=match is not False, empty_verified=match is True)
                     elif match is not False and machine.state.status == Status.EMPTY:
                         # Ambiguous YOLO overlap without a clear visual change may hold
                         # its last EMPTY until expiry, but cannot verify or refresh it.
                         obs = replace(obs, view_clear=True)
-                machine.observe(obs)
+                machine.observe(obs, marginal_reference=marginal_reference)
+        else:
+            for machine in self.machines.values():
+                machine.cancel_vlm_review()
         return self.tick(now)
 
 
