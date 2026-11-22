@@ -104,7 +104,7 @@ class ComparisonTests(unittest.TestCase):
                 self.assertFalse(machine.review_vlm(Status.EMPTY, 0, 3))
                 boxes = {"person": [Detection(0, .9, (100, 110, 180, 280))],
                          "bottle": [Detection(39, .35, (100, 110, 180, 280))],
-                         "ambiguous": [Detection(0, .9, (190, 110, 360, 280))]}
+                         "ambiguous": [Detection(0, .9, (220, 110, 380, 280))]}
                 update(10, boxes.get(conflict, []), False if conflict == "strong_change" else None,
                        delay=2.5 if conflict == "stale" else .2, reference=conflict != "no_reference")
                 if conflict == "slow_vote":

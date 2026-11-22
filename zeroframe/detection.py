@@ -44,7 +44,7 @@ class Detection:
     @property
     def accepted(self):
         return self.class_id in CLASSES and self.confidence >= (
-            0.50 if self.class_id == 0 else 0.35
+            0.30 if self.class_id == 0 else 0.20
         )
 
 
@@ -54,22 +54,14 @@ def seat_observations(config, detections, *, observed_at, frame_width, frame_hei
     signals = {seat.seat_id: {"person": False, "belongings": False, "view_clear": True}
                for seat in config.seats}
     for detection in detections:
-        strong_overlap = True
-        if detection.class_id == 0:
-            overlaps = config.overlapping_seat_ratios(
-                detection.bbox, frame_width=frame_width, frame_height=frame_height,
-                normalize_to_smaller=True,
-            )
-            candidates = tuple(overlaps)
-            strong_overlap = len(candidates) == 1 and overlaps[candidates[0]] >= 0.5
-        else:
-            candidates = config.matching_seat_ids(
-                detection.bbox, frame_width=frame_width, frame_height=frame_height
-            )
         if detection.class_id not in CLASSES:
             continue
-        if len(candidates) != 1 or not detection.accepted or not strong_overlap:
-            for seat_id in candidates:
+        overlaps = config.overlapping_seat_ratios(
+            detection.bbox, frame_width=frame_width, frame_height=frame_height
+        )
+        candidates = [seat_id for seat_id, fraction in overlaps.items() if fraction >= 0.5]
+        if len(candidates) != 1 or not detection.accepted:
+            for seat_id in overlaps:
                 signals[seat_id]["view_clear"] = False
             continue
         signals[candidates[0]]["person" if detection.class_id == 0 else "belongings"] = True
@@ -155,7 +147,8 @@ class YoloDetector:
         try:
             results = self.model.predict(
                 source=frame, device="cpu", imgsz=640, rect=False,
-                classes=list(CLASSES), conf=0.25, stream=False,
+                # Keep exact 0.20 scores through YOLO's strict confidence prefilter.
+                classes=list(CLASSES), conf=0.19, stream=False,
                 save=False, save_txt=False, save_crop=False, save_frames=False,
                 visualize=False, show=False, verbose=False, augment=False,
             )

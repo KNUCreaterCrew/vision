@@ -174,7 +174,7 @@ class EmptyReferenceTests(unittest.TestCase):
     def test_reference_rejects_dark_or_blocked_seats(self):
         with self.assertRaisesRegex(ValueError, "TOO_DARK"):
             EmptyReference(self.config, self.frame * 0, self.clear)
-        for confidence in (.34, .85):
+        for confidence in (.195, .85):
             detections = [Detection(67, confidence, (90, 30, 100, 40))]
             observations = seat_observations(self.config, detections, observed_at=0,
                                              frame_width=160, frame_height=80)
