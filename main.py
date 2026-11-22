@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from calibrate import calibrate
-from run_vision import run
+from run_vision import DEFAULT_MODEL, run
 from zeroframe.dev_remote import DevelopmentDesktop
 from zeroframe.roi import load_config
 
@@ -110,7 +110,7 @@ class Launcher:
         self.room = tk.StringVar(value="IT4-101")
         self.max_seats = tk.StringVar(value="4")
         self.camera = tk.StringVar(value="0")
-        self.model = tk.StringVar(value="local/yolo11n.pt")
+        self.model = tk.StringVar(value=DEFAULT_MODEL)
         for row, (label, variable) in enumerate((
             ("방 ID", self.room), ("최대 좌석 수", self.max_seats),
             ("카메라 번호", self.camera), ("YOLO 모델", self.model),
@@ -174,7 +174,7 @@ class Launcher:
             room, max_seats, camera, model = read_settings(
                 self.room.get(), self.max_seats.get(), self.camera.get(), self.model.get())
             if action in ("detect", "compare") and not model.exists():
-                raise ValueError("YOLO 모델이 없습니다. local/yolo11n.pt를 준비하거나 모델 경로를 선택하세요.\n"
+                raise ValueError(f"YOLO 모델이 없습니다. {DEFAULT_MODEL}를 준비하거나 모델 경로를 선택하세요.\n"
                                  "최초 설치·다운로드 방법은 README.md를 참고하세요.")
             exists = self.config_path.exists()
             needs_calibration = action == "calibrate" or not exists

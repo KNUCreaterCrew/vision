@@ -210,13 +210,15 @@ class EmptyReference:
             return zero, lut
         return np.rint(shift).astype(np.int16), lut
 
-    def compare(self, frame, *, lighting_luts=None):
-        """Optionally return this frame's per-seat VLM tone curves in lighting_luts."""
+    def compare(self, frame, *, lighting_luts=None, visible_seats=None):
+        """Optionally collect usable raw views and VLM tone curves for this frame."""
         import numpy as np
 
         cv2 = require_opencv()
         if lighting_luts is not None:
             lighting_luts.clear()
+        if visible_seats is not None:
+            visible_seats.clear()
         shift, background_lut = self._background_shift(frame)
         matches = {}
         for seat_id, (region, mask, reference) in self.seats.items():
@@ -226,6 +228,8 @@ class EmptyReference:
             matches[seat_id] = False
             saved = reference.pixels()
             if visibility_stats(luma, width=width, height=height)["usable"]:
+                if visible_seats is not None:
+                    visible_seats.add(seat_id)
                 expected = np.clip(saved + shift, 0, 255).astype(np.uint8)
                 match = _similar_pixels(pixels, expected, mask)
                 if match is not True:

@@ -17,6 +17,7 @@ from zeroframe.vlm_compare import VLMComparison
 
 
 WINDOW = "ZeroFrame - local YOLO (Q/ESC to quit)"
+DEFAULT_MODEL = "local/yolo11s.pt"
 DEFAULT_FPS = 0.1
 PREVIEW_FPS = 10
 COLORS = {"UNKNOWN": (150, 150, 150), "OCCUPIED": (0, 0, 255),
@@ -156,6 +157,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                     finished_at = monotonic()
                     latency_ms = (finished_at - inference_start) * 1000
                     matches = None
+                    visible_seats = set()
                     lighting_luts = {} if vlm_empty else None
                     if enroll:
                         enroll = False
@@ -179,11 +181,12 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
                                                f"Reference rejected: {error}. Retry with all seats clear.")
                         print(reference_label, flush=True)
                     elif reference is not None and finished_at - observed_at <= MAX_RESULT_AGE_SECONDS:
-                        matches = reference.compare(frame, lighting_luts=lighting_luts)
+                        matches = reference.compare(frame, lighting_luts=lighting_luts, visible_seats=visible_seats)
                         finished_at = monotonic()
                     stale = finished_at - observed_at > MAX_RESULT_AGE_SECONDS
                     states = tracker.update(detections, observed_at=observed_at, now=finished_at,
-                                            frame_width=width, frame_height=height, empty_matches=matches)
+                                            frame_width=width, frame_height=height, empty_matches=matches,
+                                            visible_seats=visible_seats)
                     if reference is not None:
                         empty_progress = {
                             seat_id: f"{machine.verified_empty_checks}/{policy.required_empty_checks}"
@@ -250,7 +253,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="roi_config.json", help="calibrated coordinate JSON")
-    parser.add_argument("--model", default="local/yolo11n.pt", help="existing trusted local .pt/.onnx/NCNN model")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="existing trusted local .pt/.onnx/NCNN model")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS,
                         help="target analysis FPS (0.1-3, default 0.1: one check every 10 seconds)")

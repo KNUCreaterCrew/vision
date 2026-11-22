@@ -32,6 +32,27 @@ class EmptyReferenceTests(unittest.TestCase):
         self.addCleanup(reference.close)
         return reference
 
+    def test_one_miss_in_visible_changed_seat_counts_but_dark_seat_resets_votes(self):
+        reference = self.enroll()
+        changed = self.frame.copy()
+        changed[18:58, 18:58] = [150, 40, 160]
+        box = (18, 18, 58, 58)
+        for cls, expected in ((0, Status.OCCUPIED), (39, Status.AWAY)):
+            for middle, usable in ((changed, True), (self.frame * 0, False)):
+                with self.subTest(cls=cls, usable=usable):
+                    tracker = SeatTracker(self.config, now=0, policy=TransitionPolicy(max_observation_gap=15))
+                    hit = [Detection(cls, .5, box)]
+                    visible = set()
+                    for t, frame, boxes in ((0, changed, hit), (10, middle, []), (20, changed, hit)):
+                        matches = reference.compare(frame, visible_seats=visible)
+                        self.assertIs(matches["A"], False)
+                        states = tracker.update(boxes, observed_at=t, now=t+.1, frame_width=160,
+                                                frame_height=80, empty_matches=matches, visible_seats=visible)
+                        if t == 10:
+                            self.assertEqual("A" in visible, usable)
+                            self.assertIsNone(states["A"].last_observed_at)
+                    self.assertEqual(states["A"].status, expected if usable else Status.UNKNOWN)
+
     def test_lights_off_reviews_enhanced_live_seat_and_excludes_object(self):
         import numpy as np
         from zeroframe.vlm import seat_image

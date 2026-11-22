@@ -51,21 +51,31 @@ class Detection:
 def seat_observations(config, detections, *, observed_at, frame_width, frame_height): #탐지 결과를 좌석 매핑 및 사람, 물건신호로 분류
     if (frame_width, frame_height) != (config.frame_width, config.frame_height):
         raise ValueError("frame resolution changed; recalibrate instead of silently scaling ROIs")
-    signals = {seat.seat_id: {"person": False, "belongings": False, "view_clear": True}
-               for seat in config.seats}
+    people, belongings = set(), set()
+    unclear_people, unclear_belongings = set(), set()
     for detection in detections:
         if detection.class_id not in CLASSES:
             continue
         overlaps = config.overlapping_seat_ratios(
             detection.bbox, frame_width=frame_width, frame_height=frame_height
         )
-        candidates = [seat_id for seat_id, fraction in overlaps.items() if fraction >= 0.5]
+        minimum_overlap = 1 / 3 if detection.class_id == 0 else 1 / 2
+        candidates = [seat_id for seat_id, fraction in overlaps.items() if fraction >= minimum_overlap]
         if len(candidates) != 1 or not detection.accepted:
-            for seat_id in overlaps:
-                signals[seat_id]["view_clear"] = False
+            unclear = unclear_people if detection.class_id == 0 else unclear_belongings
+            unclear.update(overlaps)
             continue
-        signals[candidates[0]]["person" if detection.class_id == 0 else "belongings"] = True
-    return {seat_id: Observation(observed_at, **signal) for seat_id, signal in signals.items()}
+        assigned = people if detection.class_id == 0 else belongings
+        assigned.add(candidates[0])
+
+    observations = {}
+    for seat in config.seats:
+        seat_id = seat.seat_id
+        person = seat_id in people
+        item = seat_id in belongings
+        clear = person or (seat_id not in unclear_people and (item or seat_id not in unclear_belongings))
+        observations[seat_id] = Observation(observed_at, person=person, belongings=item, view_clear=clear)
+    return observations
 
 
 class SeatTracker:
@@ -81,7 +91,8 @@ class SeatTracker:
         self._now = now
         return states
 
-    def update(self, detections, *, observed_at, now, frame_width, frame_height, empty_matches=None):
+    def update(self, detections, *, observed_at, now, frame_width, frame_height, empty_matches=None,
+               visible_seats=()):
         _validate_seconds("now", now)
         _validate_seconds("observed_at", observed_at)
         if now < self._now:
@@ -96,16 +107,18 @@ class SeatTracker:
             for seat_id, machine in self.machines.items():
                 obs = observations[seat_id]
                 marginal_reference = False
+                visible_change = False
                 if empty_matches is not None and not (obs.person or obs.belongings):
                     match = empty_matches[seat_id]
                     if obs.view_clear:
                         marginal_reference = match is None
+                        visible_change = match is False and seat_id in visible_seats
                         obs = replace(obs, view_clear=match is not False, empty_verified=match is True)
                     elif match is not False and machine.state.status == Status.EMPTY:
                         # Ambiguous YOLO overlap without a clear visual change may hold
                         # its last EMPTY until expiry, but cannot verify or refresh it.
                         obs = replace(obs, view_clear=True)
-                machine.observe(obs, marginal_reference=marginal_reference)
+                machine.observe(obs, marginal_reference=marginal_reference, visible_change=visible_change)
         else:
             for machine in self.machines.values():
                 machine.cancel_vlm_review()

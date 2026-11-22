@@ -39,7 +39,7 @@ class VisionRunnerTests(unittest.TestCase):
         worker.submit.side_effect = submit
         worker.poll.side_effect = lambda _: pending.pop() if pending and now >= pending[0][1] + 3 else None
         reference = Mock()
-        def dim_view(frame, *, lighting_luts):
+        def dim_view(frame, *, lighting_luts, visible_seats):
             lighting_luts["A-01"] = "test LUT"
             return {"A-01": None, "A-02": None}
 
