@@ -18,7 +18,7 @@ def main(argv=None):
     config = TransportConfig(f"http://127.0.0.1:{args.port}", os.environ.get("EDGE_NODE_SECRET_KEY", DEVELOPMENT_KEY))
     started_at = monotonic()
     initial = {"A-01": SeatState(Status.UNKNOWN, started_at, reason=Reason.STALE_OBSERVATION)}
-    publisher = StatusPublisher(config, "IT4-101", initial, started_at=started_at)
+    publisher = StatusPublisher(config, "IT4-108", initial, started_at=started_at)
     print("Synthetic metadata demo: no camera/model; sends only to the local receiver.")
     last_observed_at = None
     try:

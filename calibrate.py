@@ -11,15 +11,19 @@ from zeroframe.roi import ROIConfig, SeatROI, load_config, save_config, validate
 
 
 WINDOW = "ZeroFrame - local calibration"
-DEMO_SEATS = ("A-01", "A-02", "B-01", "B-02")
+ROOM_SEATS = {
+    "IT4-108": ("A-01", "A-02", "A-03", "B-01", "B-02", "B-03"),
+    "IT4-104": ("A-01", "A-02", "A-03", "B-01", "B-02", "B-03", "C-01", "C-02", "C-03"),
+}
 
 
 def _next_seat_id(room_id, requested, seats):
     if len(seats) < len(requested):
         return requested[len(seats)]
     used = {seat.seat_id for seat in seats}
-    if room_id == "IT4-101" and used.issubset(DEMO_SEATS):
-        for seat_id in DEMO_SEATS:
+    seeded = ROOM_SEATS.get(room_id)
+    if seeded and used.issubset(seeded):
+        for seat_id in seeded:
             if seat_id not in used:
                 return seat_id
     last = seats[-1].seat_id
@@ -175,7 +179,7 @@ def calibrate(room_id, seat_ids=None, *, max_seats=None, camera=0, output="roi_c
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--room", required=True, help="Room ID, e.g. IT4-101")
+    parser.add_argument("--room", required=True, help="Room ID, e.g. IT4-108")
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--max-seats", type=int, help="Maximum polygons to draw; seat IDs are assigned automatically")
     selection.add_argument("--seats", nargs="+", help="Seat IDs in calibration order, e.g. A-01 A-02")

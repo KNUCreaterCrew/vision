@@ -107,8 +107,8 @@ class Launcher:
         ttk.Label(body, text="좌석을 설정하고, 사람과 소지품의 탐지 결과를 확인하세요.").grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(4, 20))
 
-        self.room = tk.StringVar(value="IT4-101")
-        self.max_seats = tk.StringVar(value="4")
+        self.room = tk.StringVar(value="IT4-108")
+        self.max_seats = tk.StringVar(value="6")
         self.camera = tk.StringVar(value="0")
         self.model = tk.StringVar(value=DEFAULT_MODEL)
         for row, (label, variable) in enumerate((

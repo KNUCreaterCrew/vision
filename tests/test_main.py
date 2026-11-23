@@ -74,8 +74,8 @@ class LauncherTests(unittest.TestCase):
         app.config_path = Path(directory) / "roi_config.json"
         model = Path(directory) / "yolo11n.pt"
         model.touch()
-        app.room = SimpleNamespace(get=lambda: "IT4-101", set=Mock())
-        app.max_seats = SimpleNamespace(get=lambda: "4", set=Mock())
+        app.room = SimpleNamespace(get=lambda: "IT4-108", set=Mock())
+        app.max_seats = SimpleNamespace(get=lambda: "6", set=Mock())
         app.camera = SimpleNamespace(get=lambda: "0")
         app.model = SimpleNamespace(get=lambda: str(model))
         app.status = Mock()
@@ -100,7 +100,7 @@ class LauncherTests(unittest.TestCase):
             app = self.launcher(directory)
 
             def calibrate(room, *, max_seats, camera, output, overwrite):
-                self.assertEqual((room, max_seats, camera, overwrite), ("IT4-101", 4, 0, False))
+                self.assertEqual((room, max_seats, camera, overwrite), ("IT4-108", 6, 0, False))
                 save_config(config, output)
                 return config
 

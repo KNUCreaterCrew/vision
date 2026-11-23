@@ -77,15 +77,25 @@ class CalibrationTests(unittest.TestCase):
             self.assertIn("Next seat: A-02", self.output)
             self.assertIn("Press S to save", self.output)
 
-    def test_single_starting_id_can_save_four_registered_seats(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "roi.json"
-            polygons = [[(x, 10), (x + 30, 10), (x, 40)] for x in (10, 110, 210, 310)]
-            self.run_calibration(path, [(32, [])] + [(ord("n"), p) for p in polygons]
-                                 + [(ord("s"), [])], room="IT4-101")
-            seats = load_config(path).seats
-            self.assertEqual([s.seat_id for s in seats], ["A-01", "A-02", "B-01", "B-02"])
-            self.assertEqual([list(s.polygon) for s in seats], polygons)
+    def test_single_starting_id_can_save_registered_seats_for_configured_rooms(self):
+        expected_by_room = {
+            "IT4-108": ["A-01", "A-02", "A-03", "B-01", "B-02", "B-03"],
+            "IT4-104": ["A-01", "A-02", "A-03", "B-01", "B-02", "B-03", "C-01", "C-02", "C-03"],
+        }
+        for room_id, expected_ids in expected_by_room.items():
+            with self.subTest(room_id=room_id), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "roi.json"
+                polygons = [
+                    [(10 + (i % 3) * 100, 10 + (i // 3) * 100),
+                     (40 + (i % 3) * 100, 10 + (i // 3) * 100),
+                     (10 + (i % 3) * 100, 40 + (i // 3) * 100)]
+                    for i in range(len(expected_ids))
+                ]
+                self.run_calibration(path, [(32, [])] + [(ord("n"), p) for p in polygons]
+                                     + [(ord("s"), [])], room=room_id)
+                seats = load_config(path).seats
+                self.assertEqual([s.seat_id for s in seats], expected_ids)
+                self.assertEqual([list(s.polygon) for s in seats], polygons)
 
     def test_count_limit_ignores_extra_clicks_and_allows_undo_at_limit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -96,7 +106,7 @@ class CalibrationTests(unittest.TestCase):
                 (ord("n"), [(80, 0), (100, 0), (100, 20)]),
                 (ord("u"), []), (ord("u"), []), (ord("n"), [(60, 30)]),
                 (ord("s"), [(80, 0)]),
-            ], room="IT4-101", max_seats=2)
+            ], room="IT4-108", max_seats=2)
             self.assertEqual([s.seat_id for s in result.seats], ["A-01", "A-02"])
             self.assertEqual(result.seats[-1].polygon[-1], (60, 30))
 
