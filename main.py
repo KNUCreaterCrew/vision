@@ -10,6 +10,7 @@ import sys
 
 from calibrate import calibrate
 from run_vision import DEFAULT_MODEL, run
+from zeroframe.detection import ITEM_LABELS
 from zeroframe.dev_remote import DevelopmentDesktop
 from zeroframe.roi import load_config
 
@@ -17,12 +18,13 @@ from zeroframe.roi import load_config
 ROOT = Path(__file__).resolve().parent
 
 
-def run_vlm_preview(config_path, model, camera):
+def run_vlm_preview(config_path, model, camera, *, item_ids=tuple(ITEM_LABELS)):
     """Keep Pi swap off until the process owning the preview and model has exited."""
     if not sys.platform.startswith("linux"):
         raise RuntimeError("실시간 VLM 재판정는 Linux에서 실행하세요.")
     command = [sys.executable, str(ROOT / "run_vision.py"), "--config", str(config_path),
-               "--model", str(model), "--camera", str(camera), "--preview", "--vlm-empty"]
+               "--model", str(model), "--camera", str(camera), "--preview", "--vlm-empty",
+               "--items", *map(str, item_ids)]
     # Serialize GUI sessions even when the first launcher has already stopped swap.
     with socket.socket(socket.AF_UNIX) as lock:
         try:
@@ -118,31 +120,39 @@ class Launcher:
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=(0, 16), pady=6)
             ttk.Entry(body, textvariable=variable).grid(row=row, column=1, sticky="ew", pady=6)
         ttk.Button(body, text="찾아보기", command=self.choose_model).grid(row=5, column=2, padx=(8, 0))
+        ttk.Label(body, text="감지 물품").grid(row=6, column=0, sticky="w", padx=(0, 16))
+        items = ttk.Frame(body)
+        items.grid(row=6, column=1, columnspan=2, sticky="w")
+        self.item_toggles = {}
+        for item_id, label in ITEM_LABELS.items():
+            enabled = tk.BooleanVar(value=True)
+            self.item_toggles[item_id] = enabled
+            ttk.Checkbutton(items, text=label, variable=enabled).pack(side="left", padx=(0, 4))
         ttk.Label(body, text="좌석 ID는 지정 순서대로 붙습니다. 최대 개수에 도달하기 전에도 저장할 수 있습니다.").grid(
-            row=6, column=0, columnspan=3, sticky="w", pady=(2, 12))
+            row=7, column=0, columnspan=3, sticky="w", pady=(2, 12))
 
         self.saved = tk.StringVar()
         ttk.Label(body, textvariable=self.saved, wraplength=600).grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(0, 16))
+            row=8, column=0, columnspan=3, sticky="w", pady=(0, 16))
         buttons = ttk.Frame(body)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="w")
+        buttons.grid(row=9, column=0, columnspan=3, sticky="w")
         ttk.Button(buttons, text="탐지 시작", command=lambda: self.launch("detect")).pack(side="left")
         ttk.Button(buttons, text="탐지 + VLM 빈자리 재판정", command=lambda: self.launch("compare")).pack(side="left", padx=4)
         ttk.Button(buttons, text="좌석 설정 / 다시 설정", command=lambda: self.launch("calibrate")).pack(
             side="left", padx=10)
         ttk.Button(buttons, text="종료", command=root.destroy).pack(side="left")
 
-        ttk.Separator(body).grid(row=9, column=0, columnspan=3, sticky="ew", pady=18)
+        ttk.Separator(body).grid(row=10, column=0, columnspan=3, sticky="ew", pady=18)
         ttk.Label(body, text="Space로 화면 고정 → 좌석마다 꼭짓점 클릭 후 N → 마지막에 S로 저장\n"
                   "탐지 화면에서 모든 좌석이 비고 잘 보일 때 E → 빈자리 기준 등록 (이번 실행만)\n"
                   "빨강 OCCUPIED · 주황 AWAY · 초록 EMPTY · 회색 UNKNOWN\n"
                   "Q / Esc / 카메라 창 닫기: 시작 화면으로 돌아오기\n"
                   "좌석 영역에는 앉은 사람의 머리·어깨·등이 보일 공간도 포함하세요.\n"
                   "카메라 장치·위치가 바뀌면 좌석을 다시 설정하세요.", justify="left").grid(
-            row=10, column=0, columnspan=3, sticky="w")
+            row=11, column=0, columnspan=3, sticky="w")
         self.status = tk.StringVar(value="준비됨. 처음이라면 탐지 시작 후 좌석을 지정하세요.")
         ttk.Label(body, textvariable=self.status, wraplength=600).grid(
-            row=11, column=0, columnspan=3, sticky="w", pady=(16, 0))
+            row=12, column=0, columnspan=3, sticky="w", pady=(16, 0))
         self.refresh_config()
 
     def choose_model(self):
@@ -197,10 +207,11 @@ class Launcher:
                     self.status.set("좌석 설정을 취소했습니다. 기존 파일은 유지됩니다.")
                     return
             if action in ("detect", "compare"):
+                item_ids = tuple(item for item, enabled in self.item_toggles.items() if enabled.get())
                 if action == "compare":
-                    run_vlm_preview(self.config_path, model, camera)
+                    run_vlm_preview(self.config_path, model, camera, item_ids=item_ids)
                 else:
-                    run(self.config_path, model, camera=camera, preview=True, vlm_compare=False)
+                    run(self.config_path, model, camera=camera, preview=True, vlm_compare=False, item_ids=item_ids)
                 self.status.set("탐지가 종료되었습니다. 다시 시작하거나 좌석을 다시 설정할 수 있습니다.")
             else:
                 self.status.set("좌석을 저장했습니다. '탐지 시작'을 누르세요.")

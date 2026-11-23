@@ -97,6 +97,7 @@ class SeatROI:
     seat_id: str
     polygon: tuple[tuple[int, int], ...]
     area: float = field(init=False, repr=False, compare=False)
+    mid_y: float = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         _identifier(self.seat_id, "seat_id")
@@ -124,6 +125,8 @@ class SeatROI:
                     raise ValueError("polygon edges must not intersect or touch themselves")
         object.__setattr__(self, "polygon", polygon)
         object.__setattr__(self, "area", double_area / 2)
+        ys = [y for _, y in polygon]
+        object.__setattr__(self, "mid_y", (min(ys) + max(ys)) / 2)
 
 
 @dataclass(frozen=True)
@@ -170,7 +173,8 @@ class ROIConfig:
         return tuple(seat.seat_id for seat in self.seats if _contains(seat.polygon, point))
 
     def overlapping_seat_ratios(self, bbox, *, frame_width: int, frame_height: int,
-                                normalize_to_smaller: bool = False) -> dict[str, float]:
+                                normalize_to_smaller: bool = False,
+                                require_upper_center: bool = False) -> dict[str, float]:
         """Return positive overlaps as fractions of box area by default."""
         self._validate_bbox(bbox, frame_width, frame_height)
         x1, y1, x2, y2 = bbox
@@ -179,6 +183,8 @@ class ROIConfig:
             raise ValueError("bbox area must be finite and positive")
         ratios = {}
         for seat in self.seats:
+            if require_upper_center and (y1 + y2) / 2 >= seat.mid_y:
+                continue
             area = _polygon_box_area(seat.polygon, bbox)
             if area > 0:
                 denominator = min(box_area, seat.area) if normalize_to_smaller else box_area

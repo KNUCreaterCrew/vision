@@ -57,7 +57,7 @@ class MappingTests(unittest.TestCase):
     def test_person_maps_when_bottom_center_is_below_seat_or_cut_off_at_frame_edge(self):
         for bottom in (450, 480):
             with self.subTest(bottom=bottom):
-                result = self.observations([Detection(0, .9, (100, 120, 200, bottom))])
+                result = self.observations([Detection(0, .9, (100, 10, 200, bottom))])
                 self.assertTrue(result["A-01"].person)
                 self.assertTrue(result["A-01"].view_clear)
                 self.assertFalse(result["A-02"].person)
@@ -94,7 +94,7 @@ class MappingTests(unittest.TestCase):
         for cls, signal in ((0, "person"), (39, "belongings")):
             for right, assigned in ((200, True), (249, True), (250, cls != 0), (300, False)):
                 with self.subTest(cls=cls, right=right):
-                    result = self.observations([Detection(cls, .9, (100, 120, right, 300))], config)
+                    result = self.observations([Detection(cls, .9, (100, 80, right, 300))], config)
                     self.assertEqual(getattr(result["one"], signal), assigned)
                     self.assertFalse(getattr(result["two"], signal))
                     self.assertEqual(result["one"].view_clear, assigned)
@@ -136,7 +136,7 @@ class TrackerTests(unittest.TestCase):
                     self.assertEqual(states["A-02"].status, Status.UNKNOWN)
 
     def test_real_pipeline_occupied_then_away_then_unknown_never_empty(self):
-        person = Detection(0, .30, (100, 350, 200, 450))
+        person = Detection(0, .30, (100, 50, 200, 150))
         laptop = Detection(63, .20, (100, 350, 200, 450))
         for second in (0, 1, 2):
             result = self.update(second, [person, laptop])
@@ -169,11 +169,31 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(result["A-01"].status, Status.UNKNOWN)
 
     def test_clipped_upper_body_can_confirm_occupied_without_visible_feet(self):
-        person = Detection(0, .9, (100, 120, 200, 480))
+        person = Detection(0, .9, (100, 10, 200, 480))
         for second in (0, 1, 2):
             result = self.update(second, [person])
         self.assertEqual(result["A-01"].status, Status.OCCUPIED)
         self.assertEqual(result["A-02"].status, Status.UNKNOWN)
+
+    def test_person_spanning_rows_only_occupies_seat_below_person_center(self):
+        config = ROIConfig("room", 640, 480, (
+            SeatROI("back", ((100, 100), (200, 100), (200, 200), (100, 200))),
+            SeatROI("front", ((100, 200), (200, 200), (200, 300), (100, 300))),
+        ))
+        person = Detection(0, .30, (110, 100, 190, 300))
+        bottle = Detection(39, .20, (130, 170, 150, 200))
+        tracker = SeatTracker(config, now=0)
+        for t in (0, 1, 2, 3):
+            states = tracker.update([person, bottle], observed_at=t, now=t,
+                                    frame_width=640, frame_height=480)
+        self.assertEqual(states["front"].status, Status.OCCUPIED)
+        self.assertEqual(states["back"].status, Status.AWAY)
+
+        for bottom, accepted in ((199, True), (200, False), (201, False)):
+            box = Detection(0, .30, (110, 100, 190, bottom))
+            obs = seat_observations(config, [box], observed_at=0, frame_width=640, frame_height=480)
+            self.assertEqual(obs["back"].person, accepted)
+            self.assertTrue(obs["back"].view_clear)
 
     def test_small_seat_with_lower_third_of_seated_person_confirms_occupied(self):
         config = ROIConfig("room", 640, 480, (
@@ -270,6 +290,17 @@ class DetectorTests(unittest.TestCase):
         for attribute in ("batch", "dataset", "results", "plotted_img"):
             self.assertIsNone(getattr(model.predictor, attribute))
 
+    def test_selected_items_filter_predictor_and_person_remains_enabled(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.pt"
+            path.touch()
+            for items, classes in (((), [0]), ((39, 67), [0, 39, 67])):
+                package, model, _, numpy, frame = self.fake_package()
+                with self.subTest(items=items), patch.dict("sys.modules", {"ultralytics": package, "numpy": numpy}), \
+                     patch.dict("os.environ", {}, clear=True):
+                    YoloDetector(path, item_ids=items).detect(frame)
+                    self.assertEqual(model.predict.call_args.kwargs["classes"], classes)
+
     def test_prediction_failure_and_wrong_classes_also_release_buffers(self):
         for failure in ("predict", "classes"):
             package, model, result, numpy, frame = self.fake_package()
@@ -279,6 +310,7 @@ class DetectorTests(unittest.TestCase):
                 result.names = {0: "chair"}
             detector = object.__new__(YoloDetector)
             detector.model = model
+            detector.class_ids = list(CLASSES)
             with patch.dict("sys.modules", {"numpy": numpy}), self.assertRaises((RuntimeError, ValueError)):
                 detector.detect(frame)
             self.assertIsNone(model.predictor.dataset)

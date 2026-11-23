@@ -78,6 +78,9 @@ class LauncherTests(unittest.TestCase):
         app.max_seats = SimpleNamespace(get=lambda: "6", set=Mock())
         app.camera = SimpleNamespace(get=lambda: "0")
         app.model = SimpleNamespace(get=lambda: str(model))
+        app.item_toggles = {item: Mock() for item in main.ITEM_LABELS}
+        for toggle in app.item_toggles.values():
+            toggle.get.return_value = True
         app.status = Mock()
         app.saved = Mock()
         return app
@@ -107,7 +110,7 @@ class LauncherTests(unittest.TestCase):
             with patch.object(main, "calibrate", side_effect=calibrate), patch.object(main, "run") as run:
                 app.launch("detect")
             run.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", camera=0, preview=True,
-                                        vlm_compare=False)
+                                        vlm_compare=False, item_ids=tuple(main.ITEM_LABELS))
             app.dialogs.askyesno.assert_not_called()
             app.root.withdraw.assert_called_once()
             app.root.deiconify.assert_called_once()
@@ -118,16 +121,20 @@ class LauncherTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             app = self.launcher(directory)
             save_config(load_config("examples/roi_config.example.json"), app.config_path)
+            for item, toggle in app.item_toggles.items():
+                toggle.get.return_value = item in (39, 67)
             for action in ("detect", "compare"):
                 with self.subTest(action=action), patch.object(main, "calibrate") as calibrate, \
                      patch.object(main, "run") as run, patch.object(main, "run_vlm_preview") as compare:
                     app.launch(action)
                     calibrate.assert_not_called()
                     if action == "compare":
-                        compare.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", 0)
+                        compare.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", 0,
+                                                        item_ids=(39, 67))
                         run.assert_not_called()
                     else:
                         run.assert_called_once()
+                        self.assertEqual(run.call_args.kwargs["item_ids"], (39, 67))
                         compare.assert_not_called()
                     app.dialogs.askyesno.assert_not_called()
 
@@ -159,9 +166,10 @@ class LauncherTests(unittest.TestCase):
             run_command.assert_not_called()
         with patch.object(Path, "read_text", return_value="Filename\n"):
             run_command.return_value.returncode = 0
-            main.run_vlm_preview("config", "model", 0)
+            main.run_vlm_preview("config", "model", 0, item_ids=())
             run_command.assert_called_once()
             self.assertIn("--preview", run_command.call_args.args[0])
+            self.assertEqual(run_command.call_args.args[0][-1], "--items")
 
     def test_declining_replacement_does_not_hide_window_or_touch_file(self):
         with TemporaryDirectory() as directory:

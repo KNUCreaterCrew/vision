@@ -13,6 +13,7 @@ CLASSES = {
     63: "laptop", 67: "cell phone", 73: "book",
 }
 MAX_RESULT_AGE_SECONDS = 2.0
+ITEM_LABELS = {24: "백팩", 26: "핸드백", 39: "물병", 63: "노트북", 67: "휴대폰", 73: "책"}
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,8 @@ def seat_observations(config, detections, *, observed_at, frame_width, frame_hei
         if detection.class_id not in CLASSES:
             continue
         overlaps = config.overlapping_seat_ratios(
-            detection.bbox, frame_width=frame_width, frame_height=frame_height
+            detection.bbox, frame_width=frame_width, frame_height=frame_height,
+            require_upper_center=detection.class_id == 0,
         )
         minimum_overlap = 1 / 3 if detection.class_id == 0 else 1 / 2
         candidates = [seat_id for seat_id, fraction in overlaps.items() if fraction >= minimum_overlap]
@@ -128,7 +130,11 @@ class SeatTracker:
 class YoloDetector:
     """A trusted local COCO model only; no runtime downloads or image outputs."""
 
-    def __init__(self, model_path):
+    def __init__(self, model_path, *, item_ids=tuple(ITEM_LABELS)):
+        selected = set(item_ids)
+        if not selected.issubset(ITEM_LABELS):
+            raise ValueError("Unknown belongings class")
+        self.class_ids = [0, *(item for item in ITEM_LABELS if item in selected)]
         path = Path(model_path)
         if not (
             (path.is_file() and path.suffix.lower() in (".pt", ".onnx"))
@@ -161,7 +167,7 @@ class YoloDetector:
             results = self.model.predict(
                 source=frame, device="cpu", imgsz=640, rect=False,
                 # Keep exact 0.20 scores through YOLO's strict confidence prefilter.
-                classes=list(CLASSES), conf=0.19, stream=False,
+                classes=self.class_ids, conf=0.19, stream=False,
                 save=False, save_txt=False, save_crop=False, save_frames=False,
                 visualize=False, show=False, verbose=False, augment=False,
             )

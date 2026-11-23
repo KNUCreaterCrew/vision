@@ -8,7 +8,7 @@ import sys
 from time import monotonic, sleep
 
 from zeroframe.camera import LatestCamera, require_opencv
-from zeroframe.detection import CLASSES, MAX_RESULT_AGE_SECONDS, SeatTracker, YoloDetector, seat_observations
+from zeroframe.detection import CLASSES, ITEM_LABELS, MAX_RESULT_AGE_SECONDS, SeatTracker, YoloDetector, seat_observations
 from zeroframe.empty_reference import EmptyReference
 from zeroframe.roi import load_config
 from zeroframe.state import TransitionPolicy
@@ -52,7 +52,7 @@ def draw_preview(cv2, frame, config, detections, states, *, fps, latency_ms, sta
 
 
 def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, transport_config=None,
-        confirm_empty_at_start=False, vlm_compare=False, vlm_empty=False):
+        confirm_empty_at_start=False, vlm_compare=False, vlm_empty=False, item_ids=tuple(ITEM_LABELS)):
     if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not isfinite(fps) or not 0.1 <= fps <= 3:
         raise ValueError("fps must be between 0.1 and 3")
     if isinstance(camera, bool) or not isinstance(camera, int) or camera < 0:
@@ -63,7 +63,7 @@ def run(config_path, model_path, *, camera=0, fps=DEFAULT_FPS, preview=False, tr
     ):
         raise RuntimeError("Preview needs a local Linux desktop; omit --preview for headless use.")
     transport = load_transport_config(transport_config)
-    detector = YoloDetector(model_path)
+    detector = YoloDetector(model_path, item_ids=item_ids)
     cv2 = require_opencv()
     started_at = monotonic()
     interval = 1 / fps
@@ -258,6 +258,8 @@ def main(argv=None):
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS,
                         help="target analysis FPS (0.1-3, default 0.1: one check every 10 seconds)")
     parser.add_argument("--preview", action="store_true", help="show frames on the local desktop only")
+    parser.add_argument("--items", type=int, nargs="*", choices=tuple(ITEM_LABELS), default=tuple(ITEM_LABELS),
+                        help="COCO belongings IDs to detect (default: all; empty list: person only)")
     vlm_mode = parser.add_mutually_exclusive_group()
     vlm_mode.add_argument("--vlm-compare", action="store_true", help="display local VLM comparisons only")
     vlm_mode.add_argument("--vlm-empty", action="store_true", help="use two local VLM checks to resolve a marginal empty reference")
@@ -268,7 +270,7 @@ def main(argv=None):
     try:
         run(args.config, args.model, camera=args.camera, fps=args.fps, preview=args.preview,
             transport_config=args.transport_config, confirm_empty_at_start=args.confirm_empty_at_start,
-            vlm_compare=args.vlm_compare, vlm_empty=args.vlm_empty)
+            vlm_compare=args.vlm_compare, vlm_empty=args.vlm_empty, item_ids=args.items)
     except KeyboardInterrupt:
         print("Stopped; camera released. No images saved.")
         return 0
