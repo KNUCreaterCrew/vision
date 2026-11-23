@@ -7,9 +7,64 @@ from unittest.mock import MagicMock, Mock, patch
 import run_vision
 from zeroframe.detection import Detection
 from zeroframe.roi import load_config
+from zeroframe.state import Status
 
 
 class VisionRunnerTests(unittest.TestCase):
+    def test_multimodal_empty_publishes_for_marginal_seat_beside_bottle(self):
+        now = 0.0
+        frame = SimpleNamespace(shape=(480, 640, 3))
+        camera, worker, publisher = MagicMock(), MagicMock(), MagicMock()
+        requests = []
+        pending = []
+        bottle = Detection(39, .35, (400, 150, 450, 250))
+
+        def advance(seconds):
+            nonlocal now
+            now += seconds
+
+        def read(_previous):
+            if now >= 30:
+                raise KeyboardInterrupt
+            return now, frame
+
+        def submit(frame, states, number, captured, *, reviews, lighting_luts):
+            requests.append(reviews)
+            if reviews:
+                self.assertEqual(lighting_luts, {"A-01": "test LUT"})
+                pending.append(("A-01", captured, Status.EMPTY))
+
+        camera.__enter__.return_value.read_after.side_effect = read
+        worker.__enter__.return_value = worker
+        worker.submit.side_effect = submit
+        worker.poll.side_effect = lambda _: pending.pop() if pending and now >= pending[0][1] + 3 else None
+        reference = Mock()
+        def dim_view(frame, *, lighting_luts, visible_seats):
+            lighting_luts["A-01"] = "test LUT"
+            return {"A-01": None, "A-02": None}
+
+        reference.compare.side_effect = dim_view
+        detector = Mock()
+        detector.detect.side_effect = [[], [bottle], [bottle]]
+        with patch.object(run_vision, "LatestCamera", return_value=camera), \
+             patch.object(run_vision, "YoloDetector", return_value=detector), \
+             patch.object(run_vision, "require_opencv", return_value=SimpleNamespace(error=RuntimeError)), \
+             patch.object(run_vision, "load_transport_config", return_value=Mock()), \
+             patch.object(run_vision, "StatusPublisher", return_value=publisher), \
+             patch.object(run_vision, "EmptyReference", return_value=reference), \
+             patch.object(run_vision, "VLMComparison", return_value=worker), \
+             patch.object(run_vision, "monotonic", side_effect=lambda: now), \
+             patch.object(run_vision, "sleep", side_effect=advance), patch("sys.stdout", new_callable=StringIO):
+            self.assertEqual(run_vision.main(["--config", "examples/roi_config.example.json",
+                                              "--confirm-empty-at-start", "--vlm-empty"]), 0)
+        self.assertEqual(requests, [{}, {"A-01": False}, {"A-01": True}])
+        final = publisher.update.call_args.args[0]
+        self.assertEqual((final["A-01"].status, final["A-01"].last_observed_at), (Status.EMPTY, 20))
+        self.assertEqual(final["A-01"].status_since, 23)
+        self.assertTrue(final["A-01"].vlm_verified)
+        self.assertEqual(final["A-02"].status, Status.AWAY)
+        self.assertEqual(publisher.update.call_args.kwargs["inference_count"], 3)
+
     def run_fake(self, *, preview=False, frame=None, detect_error=None, camera_error=None,
                  transport=None, publisher=None):
         cv = SimpleNamespace(

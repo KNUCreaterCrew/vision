@@ -128,6 +128,8 @@ def build_report(room_id, states, *, now, started_at, inference_count, api_clock
                 seat["reason"] = state.reason.value
         elif state.status in (Status.OCCUPIED, Status.AWAY):
             seat["decision_source"] = "YOLO"
+        elif state.vlm_verified:
+            seat["decision_source"] = "YOLO_VLM"
         if state.last_observed_at is not None:
             seat["last_observed_at"] = api_clock.timestamp(state.last_observed_at)
         seats.append(seat)

@@ -70,6 +70,7 @@ class SeatState:
     status_since: float
     last_observed_at: float | None = None
     reason: Reason | None = None
+    vlm_verified: bool = False
 
 
 class SeatStateMachine:
@@ -87,7 +88,10 @@ class SeatStateMachine:
         self._last_input_at: float | None = None
         self._candidate: Status | None = None
         self._candidate_since = now
+        self._before_miss: tuple[Status, float, float] | None = None
         self._verified_checks = 0
+        self.vlm_review_at = None
+        self.vlm_first_empty_at = None
         self._state = SeatState(Status.UNKNOWN, now, reason=Reason.STALE_OBSERVATION)
 
     @property
@@ -109,14 +113,44 @@ class SeatStateMachine:
             and now - self._last_input_at > self.policy.max_observation_gap
         ):
             self._candidate = None
+            self._before_miss = None
             self._verified_checks = 0
+            self.cancel_vlm_review()
         last_valid = self._state.last_observed_at
         reference = self._started_at if last_valid is None else last_valid
         if now - reference >= self.policy.stale_seconds:
+            if self._state.status != Status.UNKNOWN:
+                self.cancel_vlm_review()
             self._unknown(Reason.STALE_OBSERVATION, now)
         return self._state
 
-    def observe(self, observation: Observation) -> SeatState:
+    def cancel_vlm_review(self):
+        self.vlm_review_at = self.vlm_first_empty_at = None
+
+    def review_vlm(self, label: Status, captured: float, now: float) -> bool:
+        """Consume one reply for the latest reviewable observation of this seat."""
+        self.tick(now)
+        if self.vlm_review_at != captured or not 0 <= now - captured < 15:
+            return False
+        self.vlm_review_at = None
+        if label != Status.EMPTY:
+            self.vlm_first_empty_at = None
+            if label in (Status.OCCUPIED, Status.AWAY) and self.state.status == Status.EMPTY:
+                self._unknown(Reason.MODEL_CONFLICT, now)
+                return True
+            return False
+        previous = self.vlm_first_empty_at
+        self.vlm_first_empty_at = captured
+        if self.state.status != Status.EMPTY and (
+            previous is None or captured - self._candidate_since < self.policy.empty_seconds
+        ):
+            return False
+        self.vlm_first_empty_at = None
+        since = self.state.status_since if self.state.status == Status.EMPTY else now
+        self._state = SeatState(Status.EMPTY, since, captured, vlm_verified=True)
+        return True
+
+    def observe(self, observation: Observation, *, marginal_reference=False, visible_change=False) -> SeatState:
         """Consume a new observation; ignore duplicates and late arrivals."""
         now = observation.observed_at
         if now < self._now or (
@@ -124,6 +158,14 @@ class SeatStateMachine:
         ):
             return self._state
         self.tick(now)
+        follow_up = self.vlm_first_empty_at is not None and self.vlm_first_empty_at == self._last_input_at
+        reviewable = (marginal_reference or (follow_up and observation.empty_verified)) and (
+            observation.view_clear and not observation.person and not observation.belongings
+        )
+        if not reviewable or not follow_up:
+            self.vlm_first_empty_at = None
+        self.vlm_review_at = now if reviewable else None
+        previous_at = self._last_input_at
         self._last_input_at = now
 
         reason = None
@@ -131,6 +173,14 @@ class SeatStateMachine:
             reason = Reason.OCCLUDED
         elif observation.empty_verified and (observation.person or observation.belongings):
             reason = Reason.MODEL_CONFLICT
+        # Only a fresh, detection-free miss may bridge two positive observations.
+        # A visible change from the empty reference can be the missed person/item.
+        before_miss = self._before_miss
+        self._before_miss = None
+        if (self._candidate in (Status.OCCUPIED, Status.AWAY) and previous_at is not None
+                and not (observation.person or observation.belongings or observation.empty_verified)
+                and (observation.view_clear or visible_change)):
+            self._before_miss = (self._candidate, self._candidate_since, previous_at)
         if reason or observation.person or observation.belongings or not observation.empty_verified:
             self._verified_checks = 0
         else:
@@ -160,6 +210,10 @@ class SeatStateMachine:
         if candidate != self._candidate:
             self._candidate = candidate
             self._candidate_since = now
+            if before_miss is not None:
+                previous_status, since, last_hit = before_miss
+                if candidate == previous_status and now - last_hit < self.policy.stale_seconds:
+                    self._candidate_since = since
 
         if candidate == Status.EMPTY:
             needs_confirmation = self._state.status != Status.EMPTY
@@ -188,4 +242,5 @@ class SeatStateMachine:
                 self._state.status_since if self._state.status == Status.UNKNOWN else now
             ),
             reason=reason,
+            vlm_verified=False,
         )

@@ -58,6 +58,31 @@ class StateMachineTests(unittest.TestCase):
         self.assertEqual(self.machine.state.status, Status.UNKNOWN)
         self.assertIsNone(self.machine.state.last_observed_at)
 
+    def test_two_of_three_requires_current_positive_and_discards_contradictory_votes(self):
+        for key, other, expected in (("person", "belongings", Status.OCCUPIED),
+                                     ("belongings", "person", Status.AWAY)):
+            for middle, confirm in (([{}], True), ([{}, {}], False), ([{other: True}], False),
+                                    ([{"empty_verified": True}], False), ([{"view_clear": False}], False)):
+                with self.subTest(key=key, middle=middle):
+                    machine = SeatStateMachine(TransitionPolicy(max_observation_gap=15, required_empty_checks=3))
+                    feed(machine, [0], **{key: True})
+                    for index, observation in enumerate(middle, 1):
+                        state = feed(machine, [10 * index], **observation)
+                        self.assertEqual(state.status, Status.UNKNOWN)
+                        self.assertIsNone(state.last_observed_at)
+                    now = 10 * (len(middle) + 1)
+                    state = feed(machine, [now], **{key: True})
+                    self.assertEqual(state.status, expected if confirm else Status.UNKNOWN)
+                    self.assertEqual(state.last_observed_at, now if confirm else None)
+
+    def test_positive_before_miss_expires_on_gap_or_stale_vote(self):
+        for miss, hit in ((10, 26), (15, 30)):
+            machine = SeatStateMachine(TransitionPolicy(max_observation_gap=15))
+            feed(machine, [0], person=True)
+            feed(machine, [miss])
+            self.assertEqual(feed(machine, [hit], person=True).status, Status.UNKNOWN)
+            self.assertEqual(feed(machine, [hit + 10], person=True).status, Status.OCCUPIED)
+
     def test_empty_requires_sustained_absence_and_current_verification(self):
         feed(self.machine, range(5))
         state = feed(self.machine, [5], empty_verified=True)

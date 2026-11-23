@@ -32,6 +32,73 @@ class EmptyReferenceTests(unittest.TestCase):
         self.addCleanup(reference.close)
         return reference
 
+    def test_one_miss_in_visible_changed_seat_counts_but_dark_seat_resets_votes(self):
+        reference = self.enroll()
+        changed = self.frame.copy()
+        changed[18:58, 18:58] = [150, 40, 160]
+        box = (18, 18, 58, 58)
+        for cls, expected in ((0, Status.OCCUPIED), (39, Status.AWAY)):
+            for middle, usable in ((changed, True), (self.frame * 0, False)):
+                with self.subTest(cls=cls, usable=usable):
+                    tracker = SeatTracker(self.config, now=0, policy=TransitionPolicy(max_observation_gap=15))
+                    hit = [Detection(cls, .5, box)]
+                    visible = set()
+                    for t, frame, boxes in ((0, changed, hit), (10, middle, []), (20, changed, hit)):
+                        matches = reference.compare(frame, visible_seats=visible)
+                        self.assertIs(matches["A"], False)
+                        states = tracker.update(boxes, observed_at=t, now=t+.1, frame_width=160,
+                                                frame_height=80, empty_matches=matches, visible_seats=visible)
+                        if t == 10:
+                            self.assertEqual("A" in visible, usable)
+                            self.assertIsNone(states["A"].last_observed_at)
+                    self.assertEqual(states["A"].status, expected if usable else Status.UNKNOWN)
+
+    def test_lights_off_reviews_enhanced_live_seat_and_excludes_object(self):
+        import numpy as np
+        from zeroframe.vlm import seat_image
+
+        reference = self.enroll()
+        # Original contrast and color cast are substantially different after lights off.
+        dim = np.rint(self.frame * [.12, .10, .09]).astype(np.uint8)
+        dim[24:52, 100:118] = [4, 1, 2]
+        self.assertEqual(reference.compare(dim), {"A": False, "B": False})
+        curves = {}
+        matches = reference.compare(dim, lighting_luts=curves)
+        self.assertEqual(matches, {"A": None, "B": False})
+        self.assertEqual(set(curves), {"A"})
+        tracker = SeatTracker(self.config, now=0, policy=TransitionPolicy(max_observation_gap=15))
+        for t in (0, 10):
+            tracker.update([], observed_at=t, now=t+.1, frame_width=160, frame_height=80,
+                           empty_matches=matches)
+            self.assertEqual(tracker.machines["A"].review_vlm(Status.EMPTY, t, t+3), t == 10)
+            self.assertFalse(tracker.machines["B"].review_vlm(Status.EMPTY, t, t+3))
+        self.assertTrue(tracker.machines["A"].state.vlm_verified)
+        self.assertEqual(tracker.machines["B"].state.status, Status.UNKNOWN)
+        try:
+            import PIL
+        except ImportError:
+            self.skipTest("optional Pillow unavailable")
+        original = dim.copy()
+        with seat_image(dim, self.config, "A", lighting_lut=curves["A"]) as image:
+            self.assertTrue(image.info["seat_visibility"]["usable"])
+            self.assertGreater(np.asarray(image).mean(), 65)
+            self.assertFalse(np.array_equal(np.asarray(image), self.frame[:, :80]))
+        np.testing.assert_array_equal(dim, original)
+        self.assertEqual(reference.compare(dim * 0, lighting_luts=curves), {"A": False, "B": False})
+        self.assertFalse(curves)
+
+    def test_black_flat_noisy_or_unrelated_dark_view_cannot_trigger_lighting_review(self):
+        import numpy as np
+
+        reference = self.enroll()
+        rng = np.random.default_rng(42)
+        for view in (self.frame * 0, np.full_like(self.frame, 14),
+                     rng.integers(2, 22, self.frame.shape, dtype=np.uint8),
+                     (self.frame[::-1] * .18).astype(np.uint8)):
+            curves = {}
+            self.assertEqual(reference.compare(view, lighting_luts=curves), {"A": False, "B": False})
+            self.assertEqual(curves, {})
+
     def test_local_object_partial_and_full_cover(self):
         reference = self.enroll()
         frame = self.frame.copy()
@@ -128,12 +195,39 @@ class EmptyReferenceTests(unittest.TestCase):
     def test_reference_rejects_dark_or_blocked_seats(self):
         with self.assertRaisesRegex(ValueError, "TOO_DARK"):
             EmptyReference(self.config, self.frame * 0, self.clear)
-        for confidence in (.34, .85):
+        for confidence in (.195, .85):
             detections = [Detection(67, confidence, (90, 30, 100, 40))]
             observations = seat_observations(self.config, detections, observed_at=0,
                                              frame_width=160, frame_height=80)
             with self.assertRaisesRegex(ValueError, "B:"):
                 EmptyReference(self.config, self.frame, observations)
+
+    def test_room_wide_dimming_recovers_two_seats_but_preserves_local_changes(self):
+        import numpy as np
+
+        config = ROIConfig("room", 160, 80, (
+            SeatROI("A", ((8, 14), (69, 14), (69, 65), (8, 65))),
+            SeatROI("B", ((89, 14), (150, 14), (150, 65), (89, 65))),
+        ))
+        clear = seat_observations(config, [], observed_at=0, frame_width=160, frame_height=80)
+        reference = EmptyReference(config, self.frame, clear)
+        self.addCleanup(reference.close)
+        dim = np.rint(self.frame * [.52, .59, .65]).astype(np.uint8)
+        self.assertNotIn(True, reference.compare(dim).values())
+        tracker = SeatTracker(config, now=0, policy=TransitionPolicy(required_empty_checks=3, max_observation_gap=15))
+        for t, frame, expected in ((0, self.frame, Status.UNKNOWN), (10, self.frame, Status.UNKNOWN),
+                                   (20, self.frame, Status.EMPTY), (30, dim * 0, Status.UNKNOWN),
+                                   (40, dim, Status.UNKNOWN), (50, dim, Status.UNKNOWN), (60, dim, Status.EMPTY)):
+            matches = reference.compare(frame, lighting_luts={})
+            states = tracker.update([], observed_at=t, now=t+.1, frame_width=160, frame_height=80,
+                                    empty_matches=matches)
+            self.assertEqual([s.status for s in states.values()], [expected, expected])
+        dim[25:43, 100:114] = [105, 20, 35]
+        matches = reference.compare(dim, lighting_luts={})
+        self.assertEqual(matches, {"A": True, "B": False})
+        local = self.frame.copy()
+        local[14:66, 8:70] = dim[14:66, 8:70]
+        self.assertIsNot(reference.compare(local, lighting_luts={})["A"], True)
 
     def test_neighbor_recovers_after_three_tolerant_matches_while_bottle_stays(self):
         import cv2

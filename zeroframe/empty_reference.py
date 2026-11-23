@@ -74,6 +74,44 @@ def _matches_after_small_shift(crop, mask, pixels, expected, original_match):
     return _similar_pixels(pixels, aligned[mask], mask)
 
 
+def _dim_seat_lut(pixels, luma, reference, mask):
+    """Fit a tone curve for a darker view only when corresponding seat detail survives."""
+    import numpy as np
+
+    cv2 = require_opencv()
+    # Spread samples across the polygon. The reference supplies exposure statistics,
+    # never pixels for the model input.
+    step = max(1, len(pixels) // 4096)
+    live = pixels[::step]
+    saved = reference[::step]
+    current_y = luma.ravel()[::step].astype(np.float32)
+    saved_y = cv2.cvtColor(saved[:, None, :], cv2.COLOR_BGR2GRAY).ravel().astype(np.float32)
+    low, mid, high = np.percentile(current_y, (5, 50, 95))
+    ref_low, ref_mid, ref_high = np.percentile(saved_y, (10, 50, 90))
+    if ref_mid - mid < 18 or high - low < 6 or np.mean(current_y <= 2) > .45:
+        return None
+    # A covered lens may still have sensor noise or a patterned surface. Require
+    # the light/dark features to correspond spatially to the enrolled seat.
+    current_detail = current_y - current_y.mean()
+    saved_detail = saved_y - saved_y.mean()
+    scale = np.linalg.norm(current_detail) * np.linalg.norm(saved_detail)
+    if scale == 0 or np.dot(current_detail, saved_detail) < .65 * scale:
+        return None
+    # Estimate contrast from the same originally dark/bright locations. A new
+    # black object must not shift the live low percentile and flatten the fit.
+    shadows, highlights = saved_y <= ref_low, saved_y >= ref_high
+    span = np.median(current_y[highlights]) - np.median(current_y[shadows])
+    if span < 3:
+        return None
+    gain = np.clip((np.median(saved_y[highlights]) - np.median(saved_y[shadows])) / span, .65, 12)
+    offset = np.median(saved.astype(np.float32) - gain * live, axis=0)
+    lut = np.clip(np.arange(256)[:, None, None] * gain + offset, 0, 255).round().astype(np.uint8)
+    corrected = cv2.LUT(pixels[:, None, :], lut)[:, 0, :]
+    if _similar_pixels(corrected, reference, mask) is False:
+        return None
+    return lut
+
+
 class _LockedPixels:
     """Lock anonymous reference storage before copying any pixels into it."""
 
@@ -150,35 +188,69 @@ class EmptyReference:
     def _background_shift(self, frame):
         import numpy as np
 
+        zero = np.zeros(3, dtype=np.int16)
         if len(self.background_tiles) < 3:
-            return np.zeros(3, dtype=np.int16)
-        deltas = np.array([np.median(frame[tile][valid], axis=0) - median
-                           for tile, valid, median in self.background_tiles])
+            return zero, None
+        current = np.array([np.median(frame[tile][valid], axis=0)
+                            for tile, valid, _ in self.background_tiles])
+        saved = np.array([median for _, _, median in self.background_tiles])
+        deltas = current - saved
         shift = np.median(deltas, axis=0)
         agreeing = (np.abs(deltas - shift) <= 8).all(axis=1)
+        # Estimate exposure from non-seat tiles. A bottle or shadow confined
+        # to a single seat cannot bias this mapping.
+        gain = np.median((saved + 1) / (current + 1), axis=0)
+        offset = np.median(saved - current * gain, axis=0)
+        residual = np.abs(current * gain + offset - saved).max(axis=1)
+        consistent_dim = (deltas.mean(axis=1) <= -6) & (residual <= 10)
+        lut = None
+        if consistent_dim.mean() >= 2 / 3 and np.all((gain >= .8) & (gain <= 2.3)):
+            lut = np.clip(np.arange(256)[:, None, None] * gain + offset, 0, 255).round().astype(np.uint8)
         if agreeing.mean() < 2 / 3 or np.abs(shift).max() > 32:
-            return np.zeros(3, dtype=np.int16)
-        return np.rint(shift).astype(np.int16)
+            return zero, lut
+        return np.rint(shift).astype(np.int16), lut
 
-    def compare(self, frame):
-        """Reject local changes (e.g. a phone) even within a much larger polygon."""
+    def compare(self, frame, *, lighting_luts=None, visible_seats=None):
+        """Optionally collect usable raw views and VLM tone curves for this frame."""
         import numpy as np
 
         cv2 = require_opencv()
-        shift = self._background_shift(frame)
+        if lighting_luts is not None:
+            lighting_luts.clear()
+        if visible_seats is not None:
+            visible_seats.clear()
+        shift, background_lut = self._background_shift(frame)
         matches = {}
         for seat_id, (region, mask, reference) in self.seats.items():
             pixels = frame[region][mask]
             luma = cv2.cvtColor(pixels[:, None, :], cv2.COLOR_BGR2GRAY)
             height, width = mask.shape
             matches[seat_id] = False
-            if not visibility_stats(luma, width=width, height=height)["usable"]:
-                continue
-            expected = np.clip(reference.pixels() + shift, 0, 255).astype(np.uint8)
-            match = _similar_pixels(pixels, expected, mask)
-            if match is not True:
-                match = _matches_after_small_shift(frame[region], mask, pixels, expected, match)
-            matches[seat_id] = match
+            saved = reference.pixels()
+            if visibility_stats(luma, width=width, height=height)["usable"]:
+                if visible_seats is not None:
+                    visible_seats.add(seat_id)
+                expected = np.clip(saved + shift, 0, 255).astype(np.uint8)
+                match = _similar_pixels(pixels, expected, mask)
+                if match is not True:
+                    match = _matches_after_small_shift(frame[region], mask, pixels, expected, match)
+                if lighting_luts is not None and match is not True and background_lut is not None:
+                    corrected = cv2.LUT(pixels[:, None, :], background_lut)[:, 0, :]
+                    residual = np.abs(corrected.astype(np.int16) - saved).max(axis=1)
+                    # Require a close match across the polygon and veto even a
+                    # small connected change before counting a reference vote.
+                    if np.mean(residual <= 16) >= .90:
+                        patch = np.zeros(mask.shape, dtype=np.uint8)
+                        patch[mask] = residual > 32
+                        _, _, stats, _ = cv2.connectedComponentsWithStats(patch, connectivity=8)
+                        if not np.any(stats[1:, cv2.CC_STAT_AREA] >= max(12, min(160, .002 * pixels.shape[0]))):
+                            match = True
+                matches[seat_id] = match
+            if lighting_luts is not None and matches[seat_id] is not True:
+                lut = _dim_seat_lut(pixels, luma, saved, mask)
+                if lut is not None:
+                    lighting_luts[seat_id] = lut
+                    matches[seat_id] = None  # VLM may review; compensation never verifies EMPTY.
         return matches
 
     def close(self):

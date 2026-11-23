@@ -66,6 +66,13 @@ class TransportConfigurationTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_vlm_empty_uses_existing_contract_source_until_expiry(self):
+        snapshot = {"A-01": SeatState(Status.EMPTY, 100, 100, vlm_verified=True)}
+        report = self.report(snapshot)
+        validate_report(report)
+        self.assertEqual(report["seats"][0]["decision_source"], "YOLO_VLM")
+        self.assertEqual(self.report(snapshot, 130)["seats"][0]["decision_source"], "FALLBACK")
+
     def report(self, state=None, now=105):
         return build_report("IT4-101", state or states(), now=now, started_at=100,
                             inference_count=10, api_clock=ApiClock(100, ORIGIN))

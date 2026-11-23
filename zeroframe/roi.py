@@ -163,7 +163,7 @@ class ROIConfig:
             raise ValueError("bbox must have positive area and fit inside the frame")
 
     def matching_seat_ids(self, bbox, *, frame_width: int, frame_height: int) -> tuple[str, ...]:
-        """Bottom-center candidates for belongings; multiple matches are ambiguous."""
+        """Return seats containing the box's bottom-center point (legacy point mapping)."""
         self._validate_bbox(bbox, frame_width, frame_height)
         x1, y1, x2, y2 = bbox
         point = ((x1 + x2) / 2, y2)
@@ -171,7 +171,7 @@ class ROIConfig:
 
     def overlapping_seat_ratios(self, bbox, *, frame_width: int, frame_height: int,
                                 normalize_to_smaller: bool = False) -> dict[str, float]:
-        """Overlap as a fraction of the box, or of the smaller shape for person mapping."""
+        """Return positive overlaps as fractions of box area by default."""
         self._validate_bbox(bbox, frame_width, frame_height)
         x1, y1, x2, y2 = bbox
         box_area = (x2 - x1) * (y2 - y1)

@@ -106,7 +106,8 @@ class LauncherTests(unittest.TestCase):
 
             with patch.object(main, "calibrate", side_effect=calibrate), patch.object(main, "run") as run:
                 app.launch("detect")
-            run.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", camera=0, preview=True)
+            run.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", camera=0, preview=True,
+                                        vlm_compare=False)
             app.dialogs.askyesno.assert_not_called()
             app.root.withdraw.assert_called_once()
             app.root.deiconify.assert_called_once()
@@ -117,11 +118,50 @@ class LauncherTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             app = self.launcher(directory)
             save_config(load_config("examples/roi_config.example.json"), app.config_path)
-            with patch.object(main, "calibrate") as calibrate, patch.object(main, "run") as run:
-                app.launch("detect")
-            calibrate.assert_not_called()
-            run.assert_called_once()
-            app.dialogs.askyesno.assert_not_called()
+            for action in ("detect", "compare"):
+                with self.subTest(action=action), patch.object(main, "calibrate") as calibrate, \
+                     patch.object(main, "run") as run, patch.object(main, "run_vlm_preview") as compare:
+                    app.launch(action)
+                    calibrate.assert_not_called()
+                    if action == "compare":
+                        compare.assert_called_once_with(app.config_path, Path(directory) / "yolo11n.pt", 0)
+                        run.assert_not_called()
+                    else:
+                        run.assert_called_once()
+                        compare.assert_not_called()
+                    app.dialogs.askyesno.assert_not_called()
+
+    @patch.object(main.sys, "platform", "linux")
+    @patch.object(main.socket, "socket")
+    @patch.object(main.subprocess, "run")
+    def test_compare_restores_zram_after_success_or_failure(self, run_command, _socket):
+        for outcome in (0, 1):
+            with self.subTest(outcome=outcome), patch.object(Path, "read_text", return_value="Filename\n/dev/zram0 partition"):
+                run_command.reset_mock()
+                run_command.side_effect = [SimpleNamespace(returncode=n) for n in (0, 0, outcome, 0)]
+                if outcome:
+                    with self.assertRaises(RuntimeError):
+                        main.run_vlm_preview("config", "model", 1)
+                else:
+                    main.run_vlm_preview("config", "model", 1)
+                commands = [call.args[0] for call in run_command.call_args_list]
+                self.assertEqual(commands[1], ["sudo", "-n", "systemctl", "stop", "dev-zram0.swap"])
+                self.assertIn("--vlm-empty", commands[2])
+                self.assertEqual(commands[3], ["sudo", "-n", "systemctl", "start", "dev-zram0.swap"])
+
+    @patch.object(main.sys, "platform", "linux")
+    @patch.object(main.socket, "socket")
+    @patch.object(main.subprocess, "run")
+    def test_compare_respects_disabled_or_unmanaged_swap(self, run_command, _socket):
+        with patch.object(Path, "read_text", return_value="Filename\n/swapfile file"):
+            with self.assertRaises(RuntimeError):
+                main.run_vlm_preview("config", "model", 0)
+            run_command.assert_not_called()
+        with patch.object(Path, "read_text", return_value="Filename\n"):
+            run_command.return_value.returncode = 0
+            main.run_vlm_preview("config", "model", 0)
+            run_command.assert_called_once()
+            self.assertIn("--preview", run_command.call_args.args[0])
 
     def test_declining_replacement_does_not_hide_window_or_touch_file(self):
         with TemporaryDirectory() as directory:

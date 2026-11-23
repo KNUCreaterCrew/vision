@@ -19,7 +19,7 @@ class MappingTests(unittest.TestCase):
 
     def test_class_specific_thresholds_and_all_belongings_classes(self):
         for cls in (0, 24, 26, 39, 63, 67, 73):
-            threshold = .50 if cls == 0 else .35
+            threshold = .30 if cls == 0 else .20
             for confidence, accepted in ((threshold, True), (threshold - .001, False)):
                 with self.subTest(cls=cls, confidence=confidence):
                     observations = self.observations([Detection(cls, confidence, (100, 120, 200, 300))])
@@ -36,7 +36,7 @@ class MappingTests(unittest.TestCase):
             for observation in self.observations(detections).values():
                 self.assertFalse(observation.person or observation.belongings or observation.empty_verified)
 
-    def test_overlapping_seats_are_blocked_even_if_another_box_maps_uniquely(self):
+    def test_unique_person_counts_while_neighbor_with_only_ambiguous_person_is_blocked(self):
         config = ROIConfig("room", 640, 480, (
             SeatROI("one", ((0, 0), (200, 0), (200, 200), (0, 200))),
             SeatROI("two", ((100, 0), (300, 0), (300, 200), (100, 200))),
@@ -44,7 +44,7 @@ class MappingTests(unittest.TestCase):
         result = self.observations([Detection(0, .9, (120, 0, 180, 100)),
                                     Detection(0, .9, (20, 0, 40, 100))], config)
         self.assertTrue(result["one"].person)
-        self.assertFalse(result["one"].view_clear)
+        self.assertTrue(result["one"].view_clear)
         self.assertFalse(result["two"].person)
         self.assertFalse(result["two"].view_clear)
 
@@ -64,37 +64,41 @@ class MappingTests(unittest.TestCase):
 
     def test_weak_body_overlap_blocks_belongings_only_confirmation(self):
         result = self.observations([
-            Detection(0, .9, (100, 0, 200, 150)),
+            Detection(0, .9, (100, 0, 200, 149)),
             Detection(63, .9, (100, 120, 200, 300)),
         ])
         self.assertFalse(result["A-01"].person)
         self.assertTrue(result["A-01"].belongings)
         self.assertFalse(result["A-01"].view_clear)
 
-    def test_half_box_overlap_is_required_and_frame_side_clipping_is_supported(self):
-        for bbox, seat_id, accepted in (
-            ((100, 0, 200, 200), "A-01", True),
-            ((100, 0, 200, 199.9), "A-01", False),
-            ((0, 120, 200, 300), "A-01", True),
-            ((500, 120, 640, 300), "A-02", True),
+    def test_class_specific_overlap_thresholds_and_frame_side_clipping(self):
+        for bbox, seat_id, person, item in (
+            ((100, 0, 200, 149.9), "A-01", False, False),
+            ((100, 0, 200, 150), "A-01", True, False),
+            ((100, 0, 200, 199.9), "A-01", True, False),
+            ((100, 0, 200, 200), "A-01", True, True),
+            ((0, 120, 200, 300), "A-01", True, True),
+            ((500, 120, 640, 300), "A-02", True, True),
         ):
-            with self.subTest(bbox=bbox):
-                result = self.observations([Detection(0, .9, bbox)])
-                self.assertEqual(result[seat_id].person, accepted)
-                self.assertEqual(result[seat_id].view_clear, accepted)
+            for cls, accepted in ((0, person), (39, item)):
+                with self.subTest(bbox=bbox, cls=cls):
+                    obs = self.observations([Detection(cls, .9, bbox)])[seat_id]
+                    self.assertEqual(obs.person if cls == 0 else obs.belongings, accepted)
+                    self.assertEqual(obs.view_clear, accepted)
 
-    def test_body_spanning_adjacent_seats_is_ambiguous_without_overlapping_polygons(self):
+    def test_adjacent_seats_require_a_unique_qualifying_overlap(self):
         config = ROIConfig("room", 640, 480, (
             SeatROI("one", ((0, 0), (200, 0), (200, 400), (0, 400))),
             SeatROI("two", ((200, 0), (400, 0), (400, 400), (200, 400))),
         ))
-        result = self.observations([Detection(0, .9, (100, 120, 250, 300))], config)
-        for observation in result.values():
-            self.assertFalse(observation.person)
-            self.assertFalse(observation.view_clear)
-        touching = self.observations([Detection(0, .9, (100, 120, 200, 300))], config)
-        self.assertTrue(touching["one"].person)
-        self.assertTrue(touching["two"].view_clear)
+        for cls, signal in ((0, "person"), (39, "belongings")):
+            for right, assigned in ((200, True), (249, True), (250, cls != 0), (300, False)):
+                with self.subTest(cls=cls, right=right):
+                    result = self.observations([Detection(cls, .9, (100, 120, right, 300))], config)
+                    self.assertEqual(getattr(result["one"], signal), assigned)
+                    self.assertFalse(getattr(result["two"], signal))
+                    self.assertEqual(result["one"].view_clear, assigned)
+                    self.assertEqual(result["two"].view_clear, assigned)
 
     def test_detection_rejects_invalid_metadata(self):
         for cls, confidence, bbox in (
@@ -116,9 +120,24 @@ class TrackerTests(unittest.TestCase):
         return self.tracker.update(detections, observed_at=second, now=second + delay,
                                    frame_width=640, frame_height=480)
 
+    def test_clear_positives_with_ambiguous_detections_are_order_independent(self):
+        box = (100, 120, 200, 300)
+        person, bottle = Detection(0, .3, box), Detection(39, .2, box)
+        weak_person, weak_item = Detection(0, .29, box), Detection(67, .195, box)
+        for boxes, expected in (([person, bottle, weak_item], Status.OCCUPIED),
+                                ([bottle, weak_item], Status.AWAY),
+                                ([bottle, weak_person], Status.UNKNOWN)):
+            for order in (boxes, boxes[::-1]):
+                with self.subTest(order=order):
+                    self.tracker = SeatTracker(self.config, now=0)
+                    for t in range(5):
+                        states = self.update(t, order)
+                    self.assertEqual(states["A-01"].status, expected)
+                    self.assertEqual(states["A-02"].status, Status.UNKNOWN)
+
     def test_real_pipeline_occupied_then_away_then_unknown_never_empty(self):
-        person = Detection(0, .8, (100, 120, 200, 300))
-        laptop = Detection(63, .8, (100, 120, 200, 300))
+        person = Detection(0, .30, (100, 350, 200, 450))
+        laptop = Detection(63, .20, (100, 350, 200, 450))
         for second in (0, 1, 2):
             result = self.update(second, [person, laptop])
         self.assertEqual(result["A-01"].status, Status.OCCUPIED)
@@ -136,7 +155,7 @@ class TrackerTests(unittest.TestCase):
         for second in (0, 1, 2):
             self.update(second, [Detection(0, .9, (100, 120, 200, 300))])
         for second in range(3, 33):
-            result = self.update(second, [Detection(0, .49, (100, 120, 200, 300))])
+            result = self.update(second, [Detection(0, .29, (100, 120, 200, 300))])
         self.assertEqual(result["A-01"].status, Status.UNKNOWN)
         self.assertEqual(result["A-01"].last_observed_at, 2)
 
@@ -156,16 +175,17 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(result["A-01"].status, Status.OCCUPIED)
         self.assertEqual(result["A-02"].status, Status.UNKNOWN)
 
-    def test_large_person_box_can_confirm_a_small_seat(self):
+    def test_small_seat_with_lower_third_of_seated_person_confirms_occupied(self):
         config = ROIConfig("room", 640, 480, (
             SeatROI("small", ((80, 180), (120, 180), (120, 220), (80, 220))),
             SeatROI("next", ((180, 180), (220, 180), (220, 220), (180, 220))),
         ))
-        for right, expected in ((99.9, Status.UNKNOWN), (100, Status.OCCUPIED),
-                                (160, Status.OCCUPIED), (190, Status.UNKNOWN)):
-            with self.subTest(right=right):
+        for bbox, expected in (((20, 40, 160, 400), Status.UNKNOWN),
+                               ((80, 100, 120, 220), Status.OCCUPIED),
+                               ((80, 99, 120, 220), Status.UNKNOWN)):
+            with self.subTest(bbox=bbox):
                 tracker = SeatTracker(config, now=0)
-                person = Detection(0, .9, (20, 40, right, 400))
+                person = Detection(0, .30, bbox)
                 for second in (0, 1, 2):
                     states = tracker.update([person], observed_at=second, now=second,
                                             frame_width=640, frame_height=480)
@@ -243,6 +263,7 @@ class DetectorTests(unittest.TestCase):
         self.assertIs(args["source"], frame)
         for option in ("save", "save_txt", "save_crop", "save_frames", "visualize", "show"):
             self.assertIs(args[option], False)
+        self.assertLess(args["conf"], .20)
         self.assertEqual(args["device"], "cpu")
         self.assertEqual(args["classes"], list(CLASSES))
         package.settings.update.assert_called_once_with({"sync": False, "hub": False})
